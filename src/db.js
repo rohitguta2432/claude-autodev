@@ -25,9 +25,9 @@ export function openDb(path = join(AUTODEV_HOME(), 'autodev.db')) {
 export function createRun(db, r) {
   const now = Date.now();
   const res = db.prepare(`INSERT INTO runs
-    (slug, repo, repo_path, worktree, branch, requirement, created_at, updated_at)
-    VALUES (?,?,?,?,?,?,?,?)`)
-    .run(r.slug, r.repo, r.repo_path, r.worktree, r.branch, r.requirement, now, now);
+    (slug, repo, repo_path, worktree, branch, requirement, stage, created_at, updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?)`)
+    .run(r.slug, r.repo, r.repo_path, r.worktree, r.branch, r.requirement, r.stage ?? 1, now, now);
   return Number(res.lastInsertRowid);
 }
 

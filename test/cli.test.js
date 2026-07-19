@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, chmodSync, readFileSync, mkdirSync, openSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, chmodSync, readFileSync, mkdirSync, openSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
 import { execSync, execFileSync, spawn } from 'node:child_process';
 
 process.env.AUTODEV_HOME = mkdtempSync(join(tmpdir(), 'autodev-cli-'));
@@ -10,7 +10,7 @@ process.env.AUTODEV_PORT = '0'; // test provides its own server port below
 process.env.AUTODEV_WORKTREES = mkdtempSync(join(tmpdir(), 'wts-'));
 
 const { startServer } = await import('../src/server.js');
-const { openDb, getRun, createRun, runDir } = await import('../src/db.js');
+const { openDb, getRun, createRun, listRuns, runDir } = await import('../src/db.js');
 const { port, close } = await startServer({ port: 0 });
 process.env.AUTODEV_PORT = String(port);
 
@@ -33,6 +33,52 @@ test('autodev run creates worktree, branch, registers run, spawns runner', async
   const branches = execSync('git branch --list', { cwd: run.worktree, encoding: 'utf8' });
   assert.match(branches, /autodev\/001-/);
   close();
+});
+
+function repoWithCompleteSpec() {
+  const repo = mkdtempSync(join(tmpdir(), 'repo-'));
+  execSync('git init -q -b main', { cwd: repo, shell: '/bin/bash' });
+  mkdirSync(join(repo, 'specs/001-rate-limit'), { recursive: true });
+  writeFileSync(join(repo, 'specs/001-rate-limit/spec.md'), '# spec\n');
+  writeFileSync(join(repo, 'specs/001-rate-limit/plan.md'), '# plan\n');
+  writeFileSync(join(repo, 'specs/001-rate-limit/tasks.md'), '- [ ] T001 x\n');
+  execSync('git add -A && git -c user.email=t@t -c user.name=t commit -q -m init', { cwd: repo, shell: '/bin/bash' });
+  return repo;
+}
+
+test('autodev run auto-adopts a matching complete spec and starts at stage 2', () => {
+  const repo = repoWithCompleteSpec();
+  const out = execFileSync('node', ['bin/autodev.js', 'run', 'add rate limit to api', '--repo', repo, '--no-spawn'], { encoding: 'utf8' });
+  assert.match(out, /adopting existing spec: specs\/001-rate-limit \(starting at Analyze\)/);
+  const db = openDb();
+  const run = listRuns(db)[0];
+  db.close();
+  assert.equal(run.stage, 2);
+});
+
+test('autodev run leaves stage 1 and prints nothing extra when requirement does not match any spec', () => {
+  const repo = repoWithCompleteSpec();
+  const out = execFileSync('node', ['bin/autodev.js', 'run', 'build an unrelated dashboard widget', '--repo', repo, '--no-spawn'], { encoding: 'utf8' });
+  assert.doesNotMatch(out, /adopting existing spec/);
+  const db = openDb();
+  const run = listRuns(db)[0];
+  db.close();
+  assert.equal(run.stage, 1);
+});
+
+test('autodev run --spec <path> pointing at incomplete dir fails cleanly: exit non-zero, no run row, no worktree', () => {
+  const repo = repoWithCompleteSpec();
+  writeFileSync(join(repo, 'specs/001-rate-limit/tasks.md'), ''); // make it incomplete
+  execSync('git add -A && git -c user.email=t@t -c user.name=t commit -q -m incomplete', { cwd: repo, shell: '/bin/bash' });
+  const db = openDb();
+  const before = listRuns(db).length;
+  db.close();
+  assert.throws(() => execFileSync('node', ['bin/autodev.js', 'run', 'add rate limit', '--repo', repo, '--spec', 'specs/001-rate-limit', '--no-spawn'], { encoding: 'utf8', stdio: 'pipe' }));
+  const db2 = openDb();
+  const after = listRuns(db2).length;
+  db2.close();
+  assert.equal(after, before);
+  assert.ok(!existsSync(join(process.env.AUTODEV_WORKTREES, basename(repo))));
 });
 
 const isAlive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };

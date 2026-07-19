@@ -23,6 +23,11 @@ test('createRun returns incrementing id and getRun round-trips', () => {
   assert.ok(run.created_at > 0);
 });
 
+test('createRun accepts an optional stage, defaulting to 1', () => {
+  const id = createRun(db, { slug: 's', repo: 'r', repo_path: '/p', worktree: '/w', branch: 'b', requirement: 'q', stage: 2 });
+  assert.equal(getRun(db, id).stage, 2);
+});
+
 test('updateRun patches only given fields', () => {
   const id = createRun(db, { slug: 's', repo: 'r', repo_path: '/p', worktree: '/w', branch: 'b', requirement: 'q' });
   updateRun(db, id, { status: 'BLOCKED', stage: 5, pid: 123 });

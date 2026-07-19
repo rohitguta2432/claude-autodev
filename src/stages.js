@@ -9,6 +9,33 @@ export function findSpecDir(worktree) {
   return dirs.length ? join(root, dirs.at(-1)) : null;
 }
 
+export function isCompleteSpecDir(dir) {
+  return ['spec.md', 'plan.md', 'tasks.md'].every(f => {
+    const p = join(dir, f);
+    return existsSync(p) && statSync(p).size > 0;
+  });
+}
+
+const STOPWORDS = new Set(['with', 'from', 'that', 'this', 'into', 'when', 'the', 'and', 'for', 'add']);
+const slugWords = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').split('-')
+  .filter(w => w.length >= 4 && !STOPWORDS.has(w));
+
+// Finds the single specs/NNN-* dir that's both complete and a word-overlap match for
+// requirement. Null on no match or ambiguous (multiple) matches — stage 1's session
+// adjudicates ambiguity itself rather than us guessing.
+export function specDirFor(repoPath, requirement) {
+  const root = join(repoPath, 'specs');
+  if (!existsSync(root)) return null;
+  const words = slugWords(requirement);
+  if (!words.length) return null;
+  const dirs = readdirSync(root).filter(d => /^\d{3}-/.test(d) && statSync(join(root, d)).isDirectory());
+  const matches = dirs.filter(d => {
+    const slugTokens = d.replace(/^\d{3}-/, '').split('-');
+    return words.some(w => slugTokens.includes(w)) && isCompleteSpecDir(join(root, d));
+  });
+  return matches.length === 1 ? join(root, matches[0]) : null;
+}
+
 export function detectTestCmd(dir) {
   const has = (f) => existsSync(join(dir, f));
   if (has('package.json')) {
@@ -33,7 +60,7 @@ const specFile = (run, f) => {
 export const STAGES = [
   {
     n: 1, key: 'spec', title: 'Spec',
-    prompt: (run) => `Use the vista-spec skill (GitHub Spec Kit format) to create a complete spec document set under specs/ of this repository for the following requirement. Include spec.md, plan.md, research.md, data-model.md, design.md, quickstart.md, tasks.md and checklists/ as the skill prescribes. Requirement: ${run.requirement}`,
+    prompt: (run) => `First check specs/ for an existing spec set covering this requirement. If a complete one exists (spec.md, plan.md, tasks.md), adopt it and do not create a duplicate; if one exists but is incomplete, complete the missing documents in place. Only create a brand-new specs/NNN-slug/ set if nothing matches. Requirement: ${run.requirement}\nUse the vista-spec skill (GitHub Spec Kit format) to create a complete spec document set under specs/ of this repository for the requirement above. Include spec.md, plan.md, research.md, data-model.md, design.md, quickstart.md, tasks.md and checklists/ as the skill prescribes.`,
     check: (run) => {
       for (const f of ['spec.md', 'plan.md', 'tasks.md']) {
         const p = specFile(run, f);
