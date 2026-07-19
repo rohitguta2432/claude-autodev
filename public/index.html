@@ -39,7 +39,7 @@
 <div id="detail"></div>
 <div id="ticker">● LIVE</div>
 <script>
-const TITLES = ['Spec','Plan','Implement','Push','Review','Test'];
+const TITLES = ['Spec','Analyze','Implement','Push','Review','Test'];
 let runs = [], open = null;
 
 // ponytail: server fields (slug/repo/worktree/blocked_reason/pr_url/event detail) are
@@ -74,7 +74,11 @@ async function renderDetail(id) {
   const d = document.getElementById('detail');
   d.className = 'open';
   document.getElementById('board').style.display = 'none';
-  const tasks = (r.events||[]).filter(e => e.type==='task_done').map(e => `<div>✓ ${esc(e.detail)}</div>`).join('');
+  let firstUndoneMarked = false;
+  const tasks = (r.tasks||[]).map(t => {
+    const mark = t.done ? '✓' : (firstUndoneMarked ? '○' : (firstUndoneMarked = true, '▶'));
+    return `<div>${mark} ${esc(t.id)} ${esc(t.text)}</div>`;
+  }).join('');
   const feed = (r.events||[]).slice(-30).reverse().map(e =>
     `<div>${new Date(e.ts).toLocaleTimeString()} ${esc(e.type)} ${esc(e.detail??'')}</div>`).join('');
   d.innerHTML = `
