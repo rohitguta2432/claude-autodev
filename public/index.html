@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>autodev — mission control</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1e2430; --mut:#7b8494; --line:#e3e7ee;
+          --acc:#3b6fe0; --ok:#3f8f5f; --bad:#c25b4e; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--ink); font:14px/1.45 "Space Grotesk",system-ui,sans-serif; }
+  header { display:flex; justify-content:space-between; align-items:baseline; padding:16px 24px; border-bottom:1px solid var(--line); }
+  header b { font-size:20px; letter-spacing:.5px; } header b i { color:var(--acc); font-style:normal; }
+  #counts { color:var(--mut); font-size:12px; }
+  #board { display:grid; grid-template-columns:repeat(6,1fr); gap:10px; padding:16px 24px; min-height:60vh; }
+  .col h4 { font-size:10px; letter-spacing:2px; color:var(--mut); text-transform:uppercase;
+            border-bottom:2px solid var(--line); padding-bottom:6px; margin-bottom:8px; }
+  .card { background:var(--card); border:1px solid var(--line); border-left:3px solid var(--acc);
+          border-radius:8px; padding:9px; margin-bottom:8px; cursor:pointer; font-size:12px;
+          box-shadow:0 1px 2px rgba(30,36,48,.05); }
+  .card.BLOCKED { border-left-color:var(--bad); } .card .repo { color:var(--mut); }
+  .card .st { font-family:"IBM Plex Mono",monospace; font-size:11px; color:var(--mut); margin-top:4px; }
+  #ticker { position:fixed; bottom:0; left:0; right:0; background:var(--card); border-top:1px solid var(--line);
+            padding:6px 24px; font:11px "IBM Plex Mono",monospace; color:var(--mut);
+            white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #detail { display:none; padding:20px 24px; }
+  #detail.open { display:block; } #detail h1 { font-size:24px; margin:6px 0; }
+  #detail .mono { font-family:"IBM Plex Mono",monospace; font-size:12px; }
+  #stepper { display:flex; gap:14px; margin:14px 0; font-size:12px; color:var(--mut); }
+  #stepper .done { color:var(--ok); } #stepper .cur { color:var(--acc); font-weight:700; }
+  #cols { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+  #feed div, #tasks div { padding:3px 0; border-bottom:1px dashed var(--line); font-family:"IBM Plex Mono",monospace; font-size:12px; }
+  button { background:var(--acc); color:#fff; border:0; border-radius:6px; padding:6px 14px; cursor:pointer; }
+  a.back { color:var(--acc); font-size:12px; cursor:pointer; }
+</style>
+</head>
+<body>
+<header><b>autodev<i>_</i></b> <span id="counts"></span></header>
+<div id="board"></div>
+<div id="detail"></div>
+<div id="ticker">● LIVE</div>
+<script>
+const TITLES = ['Spec','Plan','Implement','Push','Review','Test'];
+let runs = [], open = null;
+
+// ponytail: server fields (slug/repo/worktree/blocked_reason/pr_url/event detail) are
+// user-supplied and land in innerHTML — escape before interpolating to block stored XSS.
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function load() {
+  runs = await (await fetch('/api/runs')).json();
+  render();
+  if (open) renderDetail(open);
+}
+function render() {
+  const counts = { RUNNING:0, BLOCKED:0, DONE:0 };
+  runs.forEach(r => counts[r.status] = (counts[r.status]||0)+1);
+  document.getElementById('counts').textContent =
+    `${counts.RUNNING||0} running · ${counts.BLOCKED||0} blocked · ${counts.DONE||0} done`;
+  const board = document.getElementById('board');
+  board.innerHTML = TITLES.map((t,i) => `<div class="col"><h4>0${i+1} ${t}</h4>${
+    runs.filter(r => r.stage === i+1 && r.status !== 'DONE').map(r => `
+      <div class="card ${esc(r.status)}" onclick="renderDetail(${r.id})">
+        <b>#${String(r.id).padStart(3,'0')} ${esc(r.slug)}</b><br>
+        <span class="repo">${esc(r.repo)} · ${esc(r.status)}</span>
+        <div class="st">${r.status==='BLOCKED' ? '■ '+esc(r.blocked_reason||'') : ''}</div>
+      </div>`).join('')
+  }</div>`).join('');
+}
+async function renderDetail(id) {
+  open = id;
+  const r = await (await fetch('/api/runs/'+id)).json();
+  const d = document.getElementById('detail');
+  d.className = 'open';
+  document.getElementById('board').style.display = 'none';
+  const tasks = (r.events||[]).filter(e => e.type==='task_done').map(e => `<div>✓ ${esc(e.detail)}</div>`).join('');
+  const feed = (r.events||[]).slice(-30).reverse().map(e =>
+    `<div>${new Date(e.ts).toLocaleTimeString()} ${esc(e.type)} ${esc(e.detail??'')}</div>`).join('');
+  d.innerHTML = `
+    <a class="back" onclick="open=null;this.parentElement.className='';document.getElementById('board').style.display='grid'">← assembly line</a>
+    <h1>#${String(r.id).padStart(3,'0')} · ${esc(r.slug)}</h1>
+    <div class="mono">${esc(r.status)} · stage ${r.stage}/6 · ${esc(r.worktree)} ${r.pr_url ? '· <a href="'+esc(r.pr_url)+'">PR</a>' : ''}</div>
+    <div id="stepper">${TITLES.map((t,i) =>
+      `<span class="${i+1 < r.stage ? 'done' : i+1 === r.stage ? 'cur' : ''}">${i+1 < r.stage ? '✓' : i+1} ${t}</span>`).join(' — ')}</div>
+    ${r.status==='BLOCKED' ? `<p class="mono" style="color:var(--bad)">■ ${esc(r.blocked_reason)}</p>
+      <button onclick="alert('Run: autodev resume ${r.id}')">Resume</button>` : ''}
+    <div id="cols"><div><h3>Tasks</h3><div id="tasks">${tasks||'<div>—</div>'}</div></div>
+    <div><h3>Activity</h3><div id="feed">${feed}</div></div></div>`;
+}
+new EventSource('/stream').onmessage = (m) => {
+  const e = JSON.parse(m.data);
+  document.getElementById('ticker').textContent =
+    `● LIVE  ${new Date(e.ts).toLocaleTimeString()}  #${e.run} ${e.type} ${e.detail??''}`;
+  load();
+};
+load();
+</script>
+</body>
+</html>
