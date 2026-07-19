@@ -81,12 +81,15 @@ test('autodev run --spec <path> pointing at incomplete dir fails cleanly: exit n
   assert.ok(!existsSync(join(process.env.AUTODEV_WORKTREES, basename(repo))));
 });
 
-test('autodev install-skill copies skill/SKILL.md to ~/.claude/skills/autodev/SKILL.md', () => {
+test('autodev install-skill copies autodev + specs-skill into ~/.claude/skills/', () => {
   const home = mkdtempSync(join(tmpdir(), 'home-'));
   execFileSync('node', ['bin/autodev.js', 'install-skill'], { encoding: 'utf8', env: { ...process.env, HOME: home } });
   const dest = join(home, '.claude/skills/autodev/SKILL.md');
   assert.ok(existsSync(dest));
   assert.equal(readFileSync(dest, 'utf8'), readFileSync('skill/SKILL.md', 'utf8'));
+  const specDest = join(home, '.claude/skills/specs-skill/SKILL.md');
+  assert.ok(existsSync(specDest));
+  assert.equal(readFileSync(specDest, 'utf8'), readFileSync('skill/specs-skill/SKILL.md', 'utf8'));
 });
 
 const isAlive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };

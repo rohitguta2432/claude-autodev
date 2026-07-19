@@ -112,10 +112,13 @@ if (cmd === 'run') {
   await emit({ runDir: runDir(id), port: PORT() }, { run: id, type: 'parked', stage: run.stage, detail: 'stopped by user' });
   console.log(`run #${id} stopped`);
 } else if (cmd === 'install-skill') {
-  const dest = join(homedir(), '.claude', 'skills', 'autodev', 'SKILL.md');
-  mkdirSync(dirname(dest), { recursive: true });
-  copyFileSync(join(ROOT, 'skill', 'SKILL.md'), dest);
-  console.log(`installed skill: ${dest}`);
+  // [repo path under skill/, installed skill name]
+  for (const [src, name] of [['SKILL.md', 'autodev'], [join('specs-skill', 'SKILL.md'), 'specs-skill']]) {
+    const dest = join(homedir(), '.claude', 'skills', name, 'SKILL.md');
+    mkdirSync(dirname(dest), { recursive: true });
+    copyFileSync(join(ROOT, 'skill', src), dest);
+    console.log(`installed skill: ${dest}`);
+  }
 } else {
   console.log('usage: autodev run "<requirement>" [--repo <path>] | status | resume <id> | stop <id> | install-skill');
 }

@@ -16,7 +16,7 @@ const stubDir = mkdtempSync(join(tmpdir(), 'stub-'));
 writeFileSync(join(stubDir, 'claude'), `#!/usr/bin/env bash
 prompt="$2"
 case "$prompt" in
-  *vista-spec*) mkdir -p specs/001-x
+  *specs-skill*) mkdir -p specs/001-x
     printf '# spec\\ncontent...............................................\\n' > specs/001-x/spec.md
     cp specs/001-x/spec.md specs/001-x/plan.md
     printf -- '- [ ] T001 build\\n' > specs/001-x/tasks.md
