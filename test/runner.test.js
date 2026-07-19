@@ -20,7 +20,7 @@ case "$prompt" in
     printf -- '- [ ] T001 build\\n' > specs/001-x/tasks.md
     printf -- '- [x] ok\\n' > specs/001-x/checklists/requirements.md
     git add -A; git -c user.email=t@t -c user.name=t commit -qm spec ;;
-  *executing-plans*) sed -i 's/- \\[ \\]/- [x]/' specs/001-x/tasks.md
+  *executing-plans*) perl -i -pe 's/- \\[ \\]/- [x]/' specs/001-x/tasks.md
     git add -A; git -c user.email=t@t -c user.name=t commit -qm impl ;;
   *ce-commit-push-pr*) git push -q -u origin HEAD ;;
   *code-review*) mkdir -p .autodev
