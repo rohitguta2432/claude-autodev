@@ -67,13 +67,13 @@ async function reviewStage(stage) { // inner review⇄fix loop
 async function testStage(stage) {
   const cmd = detectTestCmd(run.worktree);
   if (!cmd) { await ev({ type: 'activity', stage: 6, detail: 'no test command detected — skipping' }); run._testsPassed = true; return; }
+  mkdirSync(join(run.worktree, '.autodev'), { recursive: true });
   for (let attempt = 0; ; attempt++) {
     try {
       const out = execSync(cmd, { cwd: run.worktree, encoding: 'utf8', timeout: CFG.stageTimeoutMin * 60_000 });
       writeFileSync(join(run.worktree, '.autodev/test-output.txt'), out); run._testsPassed = true; return;
     } catch (e) {
       const out = `${e.stdout ?? ''}\n${e.stderr ?? ''}`;
-      mkdirSync(join(run.worktree, '.autodev'), { recursive: true });
       writeFileSync(join(run.worktree, '.autodev/test-output.txt'), out);
       if (attempt >= CFG.maxRetries) { run._testsPassed = false;
         throw Object.assign(new Error(`tests still failing after ${attempt} fix attempts`), { final: true }); }
