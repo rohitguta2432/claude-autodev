@@ -10,6 +10,7 @@ export const runDir = (id) => join(AUTODEV_HOME(), 'runs', String(id));
 export function openDb(path = join(AUTODEV_HOME(), 'autodev.db')) {
   mkdirSync(AUTODEV_HOME(), { recursive: true });
   const db = new DatabaseSync(path);
+  db.exec('PRAGMA busy_timeout = 5000');
   db.exec(`CREATE TABLE IF NOT EXISTS runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     slug TEXT NOT NULL, repo TEXT NOT NULL, repo_path TEXT NOT NULL,
