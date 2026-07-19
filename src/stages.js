@@ -60,7 +60,7 @@ const specFile = (run, f) => {
 export const STAGES = [
   {
     n: 1, key: 'spec', title: 'Spec',
-    prompt: (run) => `First check specs/ for an existing spec set covering this requirement. If a complete one exists (spec.md, plan.md, tasks.md), adopt it and do not create a duplicate; if one exists but is incomplete, complete the missing documents in place. Only create a brand-new specs/NNN-slug/ set if nothing matches. Requirement: ${run.requirement}\nUse the vista-spec skill (GitHub Spec Kit format) to create a complete spec document set under specs/ of this repository for the requirement above. Include spec.md, plan.md, research.md, data-model.md, design.md, quickstart.md, tasks.md and checklists/ as the skill prescribes.`,
+    prompt: (run) => `First check specs/ for an existing spec set covering this requirement. If a complete one exists (spec.md, plan.md, tasks.md), adopt it and do not create a duplicate; if one exists but is incomplete, complete the missing documents in place. Only create a brand-new specs/NNN-slug/ set if nothing matches. Requirement: ${run.requirement}\nUse the vista-spec skill if it is installed; otherwise create a GitHub Spec Kit document set yourself: specs/NNN-slug/ containing spec.md (user scenarios, functional requirements, success criteria), plan.md (technical approach), tasks.md (ordered checkbox tasks \`- [ ] T001 ...\`), plus research.md/data-model.md/quickstart.md/checklists/ as appropriate.`,
     check: (run) => {
       for (const f of ['spec.md', 'plan.md', 'tasks.md']) {
         const p = specFile(run, f);
@@ -81,7 +81,7 @@ export const STAGES = [
   },
   {
     n: 3, key: 'implement', title: 'Implement',
-    prompt: (run) => `Use the executing-plans skill to implement the newest specs/NNN-*/tasks.md in this repository, task by task, test-driven, committing after each task and ticking each task checkbox (- [x] T###) in tasks.md as you complete it. All tests must pass before you finish.`,
+    prompt: (run) => `Use the executing-plans skill if it is installed; otherwise implement the newest specs/NNN-*/tasks.md in this repository yourself, task by task, test-driven, committing after each task and ticking each task checkbox (- [x] T###) in tasks.md as you complete it. All tests must pass before you finish.`,
     check: (run) => {
       const tasks = readFileSync(specFile(run, 'tasks.md'), 'utf8');
       const un = tasks.match(/^- \[ \] (T\d+)/m);
@@ -91,7 +91,7 @@ export const STAGES = [
   },
   {
     n: 4, key: 'push', title: 'Push',
-    prompt: (run) => `Use the ce-commit-push-pr skill: ensure all work on the current branch (${run.branch}) is committed with clear conventional-commit messages, push the branch to the remote with upstream tracking, and open a pull request. Write the PR URL (just the URL) to .autodev/pr-url in the repo root.`,
+    prompt: (run) => `Use the ce-commit-push-pr skill if it is installed; otherwise: ensure all work on the current branch (${run.branch}) is committed with clear conventional-commit messages, push the branch to the remote with upstream tracking (git push -u), and open a pull request with \`gh pr create\` (or equivalent). Write the PR URL (just the URL) to .autodev/pr-url in the repo root.`,
     check: (run) => {
       try { git(run.worktree, 'rev-parse --abbrev-ref @{u}'); }
       catch { throw new Error('branch has no upstream — push failed'); }
@@ -99,7 +99,7 @@ export const STAGES = [
   },
   {
     n: 5, key: 'review', title: 'Review', // runner drives the review⇄fix loop; this is one review round's prompt
-    prompt: (run) => `Use the code-review skill at high effort to review all changes on this branch relative to the default branch. Then write your verdict as JSON to .autodev/review.json in the repo root: {"verdict":"APPROVE"|"REQUEST_CHANGES","findings":[{"file":"...","summary":"...","severity":"..."}]}. APPROVE only if no correctness, security, or data-loss findings remain.`,
+    prompt: (run) => `Use the code-review skill at high effort if installed; otherwise rigorously self-review all changes on this branch relative to the default branch for correctness, security, and data-loss risk. Then write your verdict as JSON to .autodev/review.json in the repo root: {"verdict":"APPROVE"|"REQUEST_CHANGES","findings":[{"file":"...","summary":"...","severity":"..."}]}. APPROVE only if no correctness, security, or data-loss findings remain.`,
     fixPrompt: (run, findings) => `A code review of this branch produced these findings that must be fixed:\n${JSON.stringify(findings, null, 2)}\nFix every finding, keep tests green, and commit the fixes.`,
     check: (run) => {
       const p = join(run.worktree, '.autodev/review.json');
@@ -110,7 +110,7 @@ export const STAGES = [
   },
   {
     n: 6, key: 'test', title: 'Test', // runner executes detectTestCmd itself; claude only summoned to fix failures
-    prompt: (run) => `The test suite is failing. Read the output in .autodev/test-output.txt, use the systematic-debugging skill to find the root cause, fix it, and commit. Do not weaken or delete tests to make them pass.`,
+    prompt: (run) => `The test suite is failing. Read .autodev/test-output.txt. Use the systematic-debugging skill if it is installed; otherwise debug methodically yourself: reproduce, isolate, find the root cause, fix it, and commit. Never weaken or delete tests to make them pass.`,
     check: (run) => { /* runner sets run._testsPassed after executing the test command */
       need(run._testsPassed, 'test command exited non-zero');
     },
