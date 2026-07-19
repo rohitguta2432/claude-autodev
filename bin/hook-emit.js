@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { emit } from '../src/events.js';
 
-let raw = '';
-for await (const c of process.stdin) raw += c;
 try {
+  let raw = '';
+  for await (const c of process.stdin) raw += c;
   const hook = JSON.parse(raw);
   const file = hook.tool_input?.file_path || hook.tool_input?.command || '';
   if (!file) process.exit(0);
