@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import { execFileSync, spawn } from 'node:child_process';
 import { mkdirSync, openSync } from 'node:fs';
-import { join, dirname, basename, resolve } from 'node:path';
+import { join, dirname, basename, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { PORT, runDir, openDb, createRun, getRun, listRuns, updateRun } from '../src/db.js';
 import { emit } from '../src/events.js';
+import { specDirFor, isCompleteSpecDir } from '../src/stages.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const base = () => `http://127.0.0.1:${PORT()}`;
@@ -37,18 +38,35 @@ function parseRunArgs(args) {
   const words = [];
   let repoPath = process.cwd();
   let noSpawn = false;
+  let specArg = null;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--repo') { repoPath = args[++i]; }
+    else if (a === '--spec') { specArg = args[++i]; }
     else if (a === '--no-spawn') { noSpawn = true; }
     else words.push(a);
   }
-  return { requirement: words.join(' '), repoPath: resolve(repoPath), noSpawn };
+  return { requirement: words.join(' '), repoPath: resolve(repoPath), noSpawn, specArg };
 }
 
 if (cmd === 'run') {
-  const { requirement, repoPath, noSpawn } = parseRunArgs(rest);
-  if (!requirement) { console.error('usage: autodev run "<requirement>" [--repo <path>]'); process.exit(1); }
+  const { requirement, repoPath, noSpawn, specArg } = parseRunArgs(rest);
+  if (!requirement) { console.error('usage: autodev run "<requirement>" [--repo <path>] [--spec <path>]'); process.exit(1); }
+
+  // Resolve spec adoption before touching git/db so an invalid --spec creates nothing.
+  let adoptedSpec = null; // repo-relative path, e.g. "specs/001-rate-limit"
+  if (specArg) {
+    const specAbs = resolve(repoPath, specArg);
+    if (!isCompleteSpecDir(specAbs)) {
+      console.error(`--spec ${specArg} is not a complete spec dir (needs non-empty spec.md, plan.md, tasks.md)`);
+      process.exit(1);
+    }
+    adoptedSpec = relative(repoPath, specAbs);
+  } else {
+    const found = specDirFor(repoPath, requirement);
+    if (found) adoptedSpec = relative(repoPath, found);
+  }
+
   await ensureServer();
   const repo = basename(repoPath);
   const db = openDb();
@@ -62,11 +80,12 @@ if (cmd === 'run') {
   const worktree = join(wtRoot, repo, `run-${nnn}`);
   mkdirSync(dirname(worktree), { recursive: true });
   execFileSync('git', ['worktree', 'add', '-b', branch, worktree], { cwd: repoPath });
-  const id = createRun(db, { slug, repo, repo_path: repoPath, worktree, branch, requirement });
+  const id = createRun(db, { slug, repo, repo_path: repoPath, worktree, branch, requirement, stage: adoptedSpec ? 2 : 1 });
   db.close();
   mkdirSync(runDir(id), { recursive: true });
   if (!noSpawn) spawnRunner(id);
   console.log(`run #${id} started — ${branch}\nworktree: ${worktree}\ndashboard: ${base()}/`);
+  if (adoptedSpec) console.log(`adopting existing spec: ${adoptedSpec} (starting at Analyze)`);
 } else if (cmd === 'status') {
   const db = openDb();
   const runs = listRuns(db);
