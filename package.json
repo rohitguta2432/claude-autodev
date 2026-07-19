@@ -8,7 +8,7 @@
   "author": "Rohit Raj",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/rohitgupta2432/claude-autodev.git"
+    "url": "git+https://github.com/rohitguta2432/claude-autodev.git"
   },
   "engines": {
     "node": ">=22.5"

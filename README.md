@@ -37,7 +37,7 @@ Requirements: Node ≥22.5, `git`, the [Claude Code CLI](https://claude.com/clau
 (`claude`), and optionally [`gh`](https://cli.github.com/) for opening PRs.
 
 ```bash
-npm install -g github:rohitgupta2432/claude-autodev
+npm install -g github:rohitguta2432/claude-autodev
 autodev install-skill   # copies the packaged skill into ~/.claude/skills/autodev/
 ```
 
