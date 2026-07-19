@@ -82,7 +82,12 @@ if (cmd === 'run') {
   const db = openDb();
   const run = getRun(db, id);
   if (!run) { console.error(`no run ${id}`); db.close(); process.exit(1); }
-  if (run.pid) { try { process.kill(run.pid); } catch {} }
+  // runner is spawned detached (its own process-group leader) and runs claude in that
+  // same group via execFileSync — killing only the runner pid leaves claude running.
+  if (run.pid) {
+    try { process.kill(-run.pid, 'SIGTERM'); }
+    catch { try { process.kill(run.pid); } catch {} }
+  }
   updateRun(db, id, { status: 'BLOCKED', blocked_reason: 'stopped by user' });
   db.close();
   await emit({ runDir: runDir(id), port: PORT() }, { run: id, type: 'parked', stage: run.stage, detail: 'stopped by user' });
