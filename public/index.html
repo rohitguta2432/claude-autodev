@@ -80,7 +80,7 @@ async function renderDetail(id) {
   d.innerHTML = `
     <a class="back" onclick="open=null;this.parentElement.className='';document.getElementById('board').style.display='grid'">← assembly line</a>
     <h1>#${String(r.id).padStart(3,'0')} · ${esc(r.slug)}</h1>
-    <div class="mono">${esc(r.status)} · stage ${r.stage}/6 · ${esc(r.worktree)} ${r.pr_url ? '· <a href="'+esc(r.pr_url)+'">PR</a>' : ''}</div>
+    <div class="mono">${esc(r.status)} · stage ${r.stage}/6 · ${esc(r.worktree)} ${r.pr_url ? (/^https?:\/\//i.test(r.pr_url) ? '· <a href="'+esc(r.pr_url)+'">PR</a>' : '· '+esc(r.pr_url)) : ''}</div>
     <div id="stepper">${TITLES.map((t,i) =>
       `<span class="${i+1 < r.stage ? 'done' : i+1 === r.stage ? 'cur' : ''}">${i+1 < r.stage ? '✓' : i+1} ${t}</span>`).join(' — ')}</div>
     ${r.status==='BLOCKED' ? `<p class="mono" style="color:var(--bad)">■ ${esc(r.blocked_reason)}</p>
