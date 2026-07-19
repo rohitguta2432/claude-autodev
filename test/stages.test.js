@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
-import { STAGES, findSpecDir, detectTestCmd } from '../src/stages.js';
+import { STAGES, findSpecDir, detectTestCmd, specDirFor, isCompleteSpecDir } from '../src/stages.js';
 
 function gitRepo() {
   const d = mkdtempSync(join(tmpdir(), 'wt-'));
@@ -57,6 +57,49 @@ test('detectTestCmd finds npm script / pytest / mvn / none', () => {
   writeFileSync(join(c, 'pom.xml'), '<project/>');
   assert.equal(detectTestCmd(c), 'mvn -q test');
   assert.equal(detectTestCmd(mkdtempSync(join(tmpdir(), 'p-'))), null);
+});
+
+function completeSpec(wt, dirName) {
+  const d = join(wt, 'specs', dirName);
+  mkdirSync(d, { recursive: true });
+  for (const f of ['spec.md', 'plan.md', 'tasks.md']) writeFileSync(join(d, f), '# content\n');
+  return d;
+}
+
+test('specDirFor: single matching complete dir wins', () => {
+  const wt = gitRepo();
+  const d = completeSpec(wt, '001-rate-limit-api');
+  assert.equal(specDirFor(wt, 'add rate limit to api'), d);
+});
+
+test('specDirFor: no matching dir returns null', () => {
+  const wt = gitRepo();
+  completeSpec(wt, '001-rate-limit-api');
+  assert.equal(specDirFor(wt, 'build a totally unrelated dashboard widget'), null);
+});
+
+test('specDirFor: two matching dirs is ambiguous, returns null', () => {
+  const wt = gitRepo();
+  completeSpec(wt, '001-rate-limit-api');
+  completeSpec(wt, '002-rate-limit-web');
+  assert.equal(specDirFor(wt, 'add rate limit everywhere'), null);
+});
+
+test('specDirFor: matching dir with incomplete tasks.md is ignored', () => {
+  const wt = gitRepo();
+  const d = join(wt, 'specs', '001-rate-limit-api');
+  mkdirSync(d, { recursive: true });
+  writeFileSync(join(d, 'spec.md'), '# content\n');
+  writeFileSync(join(d, 'plan.md'), '# content\n');
+  writeFileSync(join(d, 'tasks.md'), ''); // empty -> incomplete
+  assert.equal(specDirFor(wt, 'add rate limit to api'), null);
+});
+
+test('isCompleteSpecDir: true only when spec/plan/tasks all non-empty', () => {
+  const wt = gitRepo();
+  const d = completeSpec(wt, '001-x');
+  assert.equal(isCompleteSpecDir(d), true);
+  assert.equal(isCompleteSpecDir(join(wt, 'specs', 'nope')), false);
 });
 
 test('review check reads .autodev/review.json verdict', () => {
