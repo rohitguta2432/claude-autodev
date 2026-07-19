@@ -56,7 +56,7 @@ async function reviewStage(stage) { // inner review⇄fix loop
     catch (e) {
       const p = join(run.worktree, '.autodev/review.json');
       if (!existsSync(p)) throw e; // review session broke — outer retry handles it
-      if (round === CFG.reviewLoops) throw e;
+      if (round === CFG.reviewLoops) { e.final = true; throw e; } // internal budget spent — park directly
       const { findings } = JSON.parse(readFileSync(p, 'utf8'));
       await ev({ type: 'retry', stage: 5, detail: `${findings?.length ?? '?'} findings — fixing` });
       runClaude(stage.fixPrompt(run, findings), 5);
@@ -75,7 +75,8 @@ async function testStage(stage) {
       const out = `${e.stdout ?? ''}\n${e.stderr ?? ''}`;
       mkdirSync(join(run.worktree, '.autodev'), { recursive: true });
       writeFileSync(join(run.worktree, '.autodev/test-output.txt'), out);
-      if (attempt >= CFG.maxRetries) { run._testsPassed = false; throw new Error(`tests still failing after ${attempt} fix attempts`); }
+      if (attempt >= CFG.maxRetries) { run._testsPassed = false;
+        throw Object.assign(new Error(`tests still failing after ${attempt} fix attempts`), { final: true }); }
       await ev({ type: 'retry', stage: 6, detail: `tests failed — fix attempt ${attempt + 1}` });
       runClaude(stage.prompt(run), 6);
     }
@@ -104,6 +105,7 @@ for (const stage of STAGES.filter(s => s.n >= run.stage)) {
       ok = true;
     } catch (e) {
       lastErr = e; lastOut = String(e.stdout ?? lastOut);
+      if (e.final) break; // stage's internal budget exhausted — no outer re-runs
       if (attempt < CFG.maxRetries) await ev({ type: 'retry', stage: stage.n, detail: String(e.message).slice(0, 200) });
     }
   }

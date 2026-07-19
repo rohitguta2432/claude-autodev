@@ -12,6 +12,7 @@ const { openDb, createRun, getRun, runDir } = await import('../src/db.js');
 const stubDir = mkdtempSync(join(tmpdir(), 'stub-'));
 writeFileSync(join(stubDir, 'claude'), `#!/usr/bin/env bash
 prompt="$2"
+echo "\${prompt:0:60}" >> ${join(stubDir, 'calls')}
 case "$prompt" in
   *vista-spec*) mkdir -p specs/001-x/checklists
     printf '# spec\\ncontent...............................................\\n' > specs/001-x/spec.md
@@ -60,12 +61,17 @@ test('runner parks a run when a stage keeps failing, resume re-enters at that st
   const wt = makeRepoWithWorktree();
   const id = createRun(db, { slug: 'y', repo: 'demo', repo_path: wt, worktree: wt, branch: 'autodev/001-x', requirement: 'demo' });
   db.close();
+  writeFileSync(join(stubDir, 'calls'), ''); // reset invocation counter
   execFileSync('node', ['src/runner.js', String(id)], { env: process.env });
   const db2 = openDb();
   const run = getRun(db2, id); db2.close();
   assert.equal(run.status, 'BLOCKED');
   assert.equal(run.stage, 5);
   assert.ok(existsSync(join(runDir(id), 'blocked.md')));
+  // internal review budget (3 rounds + 2 fixes) must not be multiplied by outer retries
+  const reviewCalls = readFileSync(join(stubDir, 'calls'), 'utf8')
+    .split('\n').filter(l => /code.review/.test(l));
+  assert.equal(reviewCalls.length, 5, `expected 5 review-stage claude calls, got ${reviewCalls.length}`);
   // fix the stub, resume
   writeFileSync(join(stubDir, 'claude'), readFileSync(join(stubDir, 'claude'), 'utf8')
     .replace('REQUEST_CHANGES', 'APPROVE'));
