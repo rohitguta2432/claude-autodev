@@ -1,8 +1,22 @@
 {
-  "name": "autodev",
+  "name": "claude-autodev",
   "version": "0.1.0",
   "type": "module",
-  "private": true,
+  "description": "Requirement in, reviewed and tested PR out. An autonomous 6-stage dev pipeline for Claude Code with a live mission-control dashboard.",
+  "keywords": ["claude-code", "ai", "pipeline", "autonomous", "agents", "sdlc", "dashboard"],
+  "license": "MIT",
+  "author": "Rohit Raj",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rohitgupta2432/claude-autodev.git"
+  },
+  "engines": {
+    "node": ">=22.5"
+  },
+  "bin": {
+    "autodev": "bin/autodev.js"
+  },
+  "files": ["bin", "src", "public", "skill"],
   "scripts": {
     "test": "node --test test/*.test.js",
     "server": "node src/server.js"
