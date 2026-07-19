@@ -10,19 +10,20 @@ description: >-
 
 # autodev — autonomous pipeline
 
-All commands run from any directory. CLI lives at `~/Documents/autodev/bin/autodev.js`.
+All commands run from any directory via the globally-installed `autodev` command
+(`npm install -g github:rohitgupta2432/claude-autodev`).
 
 ## Start a run
 1. Confirm the target repo: `--repo <path>` argument, else the current working
    directory (must be a git repo — verify with `git rev-parse --git-dir`).
-2. Run: `node ~/Documents/autodev/bin/autodev.js run "<requirement>" --repo <path>`
+2. Run: `autodev run "<requirement>" --repo <path>`
 3. Relay the output to the user: run id, branch, worktree, dashboard URL
    (http://127.0.0.1:4590/). That's all — the run is fully autonomous.
 
 ## Other commands
-- Status: `node ~/Documents/autodev/bin/autodev.js status`
-- Resume a BLOCKED run: `node ~/Documents/autodev/bin/autodev.js resume <id>`
+- Status: `autodev status`
+- Resume a BLOCKED run: `autodev resume <id>`
   (first read `~/.autodev/runs/<id>/blocked.md` and summarize the diagnosis to the user)
-- Stop: `node ~/Documents/autodev/bin/autodev.js stop <id>`
+- Stop: `autodev stop <id>`
 
 Never re-implement pipeline stages yourself — the runner owns them.
