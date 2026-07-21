@@ -43,3 +43,11 @@ test('listRuns returns newest first', () => {
   createRun(db, { slug: 'b', repo: 'r', repo_path: '/p', worktree: '/w', branch: 'b', requirement: 'q' });
   assert.deepEqual(listRuns(db).map(r => r.slug), ['b', 'a']);
 });
+
+test('listRuns surfaces in-progress runs above blocked/done, even when older', () => {
+  const mk = (slug) => createRun(db, { slug, repo: 'r', repo_path: '/p', worktree: '/w', branch: 'b', requirement: 'q' });
+  updateRun(db, mk('running'), { status: 'RUNNING' }); // oldest, still in progress
+  updateRun(db, mk('blocked'), { status: 'BLOCKED' });
+  updateRun(db, mk('done'),    { status: 'DONE' });    // newest
+  assert.deepEqual(listRuns(db).map(r => r.slug), ['running', 'blocked', 'done']);
+});

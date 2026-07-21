@@ -3,49 +3,246 @@
 <head>
 <meta charset="utf-8">
 <title>autodev — mission control</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  :root { --bg:#f6f7f9; --card:#fff; --ink:#1e2430; --mut:#7b8494; --line:#e3e7ee;
-          --acc:#3b6fe0; --ok:#3f8f5f; --bad:#c25b4e; }
+  :root { --bg:#f8f9fb; --card:#fff; --ink:#16202e; --slate:#5b6878; --mut:#8b95a5;
+          --line:#e3e7ee; --line2:#eef1f6; --acc:#2f6fed; --ok:#2e8a5c; --bad:#c8443c;
+          --hi:#f2f6ff; --code-bg:#e9edf4; --code-ink:#1d3a75; }
   * { box-sizing:border-box; margin:0; }
-  body { background:var(--bg); color:var(--ink); font:14px/1.45 "Space Grotesk",system-ui,sans-serif; }
-  header { display:flex; justify-content:space-between; align-items:baseline; padding:16px 24px; border-bottom:1px solid var(--line); }
-  header b { font-size:20px; letter-spacing:.5px; } header b i { color:var(--acc); font-style:normal; }
-  #counts { color:var(--mut); font-size:12px; }
-  #board { display:grid; grid-template-columns:repeat(6,1fr); gap:10px; padding:16px 24px; min-height:60vh; }
-  .col h4 { font-size:10px; letter-spacing:2px; color:var(--mut); text-transform:uppercase;
-            border-bottom:2px solid var(--line); padding-bottom:6px; margin-bottom:8px; }
+  body { background:var(--bg); color:var(--ink);
+         font:14px/1.5 "IBM Plex Sans",system-ui,sans-serif; -webkit-font-smoothing:antialiased; }
+  .mono { font-family:"IBM Plex Mono",ui-monospace,monospace; }
+  code { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:.86em;
+         background:var(--code-bg); color:var(--code-ink); border-radius:3px; padding:1px 5px; }
+  a { color:var(--acc); text-decoration:none; } a:hover { text-decoration:underline; }
+  button { background:var(--acc); color:#fff; border:0; border-radius:6px; padding:7px 15px; cursor:pointer; font:inherit; }
+  button:hover { filter:brightness(1.06); }
+
+  /* ---- header ---- */
+  header { display:grid; grid-template-columns:1fr auto 1fr; align-items:center;
+           padding:14px 26px; border-bottom:1px solid var(--line); background:var(--card); }
+  header b { font-size:19px; letter-spacing:.5px; text-align:center; } header b i { color:var(--acc); font-style:normal; }
+  .hdr-back { font:600 10px/1 "IBM Plex Mono",monospace; letter-spacing:1.5px; text-transform:uppercase;
+              color:var(--mut); cursor:pointer; }
+  .hdr-back:hover { color:var(--acc); text-decoration:none; }
+  .hdr-right { justify-self:end; display:flex; align-items:center; gap:16px; white-space:nowrap;
+               font:600 11px/1 "IBM Plex Mono",monospace; letter-spacing:.5px; color:var(--slate); }
+  .hdr-right #counts { display:inline-flex; align-items:center; gap:5px; }
+  .hdr-right .dot { color:var(--ok); }
+  #clock { color:var(--mut); }
+
+  /* ---- board (assembly line) ---- */
+  #board { display:grid; grid-template-columns:repeat(7,1fr); gap:12px; padding:18px 26px; min-height:60vh; }
+  .col h4 { font:600 10px/1 "IBM Plex Mono",monospace; letter-spacing:2px; color:var(--mut); text-transform:uppercase;
+            border-bottom:2px solid var(--line); padding-bottom:7px; margin-bottom:9px; }
   .card { background:var(--card); border:1px solid var(--line); border-left:3px solid var(--acc);
-          border-radius:8px; padding:9px; margin-bottom:8px; cursor:pointer; font-size:12px;
-          box-shadow:0 1px 2px rgba(30,36,48,.05); }
+          border-radius:8px; padding:10px; margin-bottom:9px; cursor:pointer; font-size:12px;
+          box-shadow:0 1px 2px rgba(22,32,46,.05); transition:box-shadow .12s,transform .12s; }
+  .card:hover { box-shadow:0 4px 12px rgba(22,32,46,.10); transform:translateY(-1px); }
   .card.BLOCKED { border-left-color:var(--bad); } .card .repo { color:var(--mut); }
   .card .st { font-family:"IBM Plex Mono",monospace; font-size:11px; color:var(--mut); margin-top:4px; }
+
+  /* ---- ticker ---- */
   #ticker { position:fixed; bottom:0; left:0; right:0; background:var(--card); border-top:1px solid var(--line);
-            padding:6px 24px; font:11px "IBM Plex Mono",monospace; color:var(--mut);
+            padding:7px 26px; font:11px/1 "IBM Plex Mono",monospace; color:var(--mut);
             white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  #detail { display:none; padding:20px 24px; }
-  #detail.open { display:block; } #detail h1 { font-size:24px; margin:6px 0; }
-  #detail .mono { font-family:"IBM Plex Mono",monospace; font-size:12px; }
-  #stepper { display:flex; gap:14px; margin:14px 0; font-size:12px; color:var(--mut); }
-  #stepper .done { color:var(--ok); } #stepper .cur { color:var(--acc); font-weight:700; }
-  #cols { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
-  #feed div, #tasks div { padding:3px 0; border-bottom:1px dashed var(--line); font-family:"IBM Plex Mono",monospace; font-size:12px; }
-  button { background:var(--acc); color:#fff; border:0; border-radius:6px; padding:6px 14px; cursor:pointer; }
-  a.back { color:var(--acc); font-size:12px; cursor:pointer; }
+  #ticker .dot { color:var(--ok); }
+
+  /* ---- run detail ---- */
+  #detail { display:none; padding:22px 26px 48px; max-width:1220px; margin:0 auto; }
+  #detail.open { display:block; }
+  .rd-hero { position:relative; }
+  .rd-crumb { font:600 10px/1 "IBM Plex Mono",monospace; letter-spacing:1.5px; text-transform:uppercase;
+              color:var(--mut); display:flex; align-items:center; gap:8px; }
+  .rd-crumb::before { content:""; width:26px; height:2px; background:var(--acc); }
+  .rd-crumb b { color:var(--slate); } .rd-crumb i { font-style:normal; color:var(--line); }
+  .rd-title { font-size:34px; font-weight:700; letter-spacing:-.5px; margin:12px 0 8px; }
+  .rd-summary { max-width:60ch; font-size:14px; color:var(--slate); }
+  .ghost { position:absolute; top:-18px; right:0; font:700 170px/1 "IBM Plex Sans"; letter-spacing:-8px;
+           color:#e9edf3; user-select:none; pointer-events:none; z-index:0; }
+  .rd-hero .ring { position:absolute; right:0; top:72px; z-index:1; background:var(--bg); border-radius:50%;
+                   width:108px; height:108px; padding:18px; box-sizing:border-box; }
+  .rd-status { display:flex; align-items:center; flex-wrap:wrap; margin-top:14px; font-size:12px; color:var(--slate); }
+  .rd-status > * { padding:0 12px; border-left:1px solid var(--line); }
+  .rd-status > :first-child { padding-left:0; border-left:0; }
+  .rd-status .live-st { font:600 11px "IBM Plex Mono",monospace; letter-spacing:1px; color:var(--ok); }
+  .rd-status .live-st.BLOCKED { color:var(--bad); } .rd-status .live-st.DONE { color:var(--acc); }
+  .rd-status .wt { color:var(--mut); }
+  .pill { font:600 10px/1 "IBM Plex Mono",monospace; letter-spacing:1px; padding:5px 9px; border-radius:5px;
+          text-transform:uppercase; border:1px solid; }
+  .pill.RUNNING { color:var(--ok); border-color:#bfe0cd; background:#eef8f2; }
+  .pill.BLOCKED { color:var(--bad); border-color:#f0c8c3; background:#fbeeec; }
+  .pill.DONE    { color:var(--acc); border-color:#c8dbff; background:#eef3fe; }
+  .badge { font:600 9px/1 "IBM Plex Mono",monospace; letter-spacing:1px; padding:3px 6px; border-radius:4px; }
+  .badge.bug     { color:var(--bad); background:#fbeeec; }
+  .badge.feature { color:var(--acc); background:#e7efff; }
+
+  .ring text.ring-n { font:700 15px "IBM Plex Sans"; fill:var(--ink); }
+  .ring text.ring-l { font:600 7px "IBM Plex Mono"; letter-spacing:1.5px; fill:var(--mut); }
+
+  .rd-meta { display:grid; grid-template-columns:repeat(6,1fr); margin:22px 0 4px;
+             border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+  .rd-meta div { padding:13px 16px 13px 0; }
+  .rd-meta .k { font:600 9px/1 "IBM Plex Mono",monospace; letter-spacing:1px; text-transform:uppercase; color:var(--mut); }
+  .rd-meta .v { font-family:"IBM Plex Mono",monospace; font-size:13px; margin-top:6px; color:var(--ink);
+                white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+  /* flight plan — stepper + per-stage telemetry merged into six cards */
+  .fp-head { display:flex; justify-content:space-between; align-items:baseline; margin:22px 0 10px; }
+  .fp-head h3 { font:600 11px/1 "IBM Plex Mono",monospace; letter-spacing:1.5px; text-transform:uppercase; }
+  .fp-head .sub, .fp-head .tot { font:11px "IBM Plex Mono",monospace; color:var(--mut); }
+  .fp-head .tot b { color:var(--ink); }
+  .fp { display:grid; grid-template-columns:repeat(7,1fr); gap:10px; }
+  .fp-card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 11px 12px;
+             position:relative; overflow:hidden; cursor:pointer; transition:box-shadow .12s; }
+  .fp-card:hover { box-shadow:0 3px 10px rgba(22,32,46,.10); }
+  .fp-card.sel { outline:2px solid var(--ink); outline-offset:-1px; }
+  .fp-card.cur { background:var(--hi); border-color:#c8dbff; }
+  .fp-card.failed { background:#fbeeec; border-color:#f0c8c3; }
+  .fp-card.queued { background:transparent; }
+  .fp-card.queued * { color:var(--mut) !important; }
+  .fp-st { font:600 9px/1 "IBM Plex Mono",monospace; letter-spacing:1px; margin:-3px 0 8px; }
+  .fp-st.done { color:var(--ok); } .fp-st.cur { color:var(--acc); }
+  .fp-st.failed { color:var(--bad); } .fp-st.queued { color:var(--mut); }
+  .fp-card.skipped { background:transparent; opacity:.5; }
+  .fp-card.skipped * { color:var(--mut) !important; } .fp-st.skipped { color:var(--mut); }
+  /* expanded stage panel (click a card) */
+  #stage-x { margin:12px 0 0; }
+  .sx { border:1px solid var(--line); background:var(--card); border-radius:8px; padding:13px 16px; }
+  .sx.failed { border-color:#f0c8c3; }
+  .sx-h { display:flex; align-items:center; gap:10px; }
+  .sx-h h4 { font-size:14px; } .sx-h .st { font:600 10px "IBM Plex Mono",monospace; letter-spacing:1px; }
+  .sx-h .close { margin-left:auto; font:600 10px "IBM Plex Mono",monospace; letter-spacing:1px; color:var(--mut);
+                 cursor:pointer; background:none; border:0; padding:4px 8px; }
+  .sx-h .close:hover { color:var(--ink); }
+  .sx-h .jump { background:var(--ink); font:600 10px "IBM Plex Mono",monospace; letter-spacing:1px; padding:8px 14px; }
+  .sx-h .jump.skip { background:none; color:var(--slate); border:1px solid var(--line); }
+  .sx-h .jump.skip:hover { border-color:var(--bad); color:var(--bad); filter:none; }
+  .sx-desc { font-size:12px; color:var(--slate); margin:8px 0 10px; }
+  .sx-meta { display:flex; gap:18px; font:11px "IBM Plex Mono",monospace; color:var(--slate); flex-wrap:wrap; }
+  .sx-meta .k { color:var(--mut); margin-right:5px; }
+  .fp-t { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:9px; }
+  .fp-t .n { font:600 11px "IBM Plex Mono",monospace; letter-spacing:1px; text-transform:uppercase; color:var(--ink); white-space:nowrap; }
+  .fp-t .n .idx { color:var(--mut); } .fp-card.done .fp-t .n .idx { color:var(--ok); }
+  .fp-card.cur .fp-t .n { color:var(--acc); }
+  .fp-t .dur { font:11px "IBM Plex Mono",monospace; color:var(--mut); }
+  .fp-card.cur .fp-t .dur { color:var(--acc); }
+  .fp-r { display:flex; justify-content:space-between; gap:6px; padding:2.5px 0; font:10px "IBM Plex Mono",monospace; }
+  .fp-r .k { color:var(--mut); letter-spacing:.5px; }
+  .fp-r .v { color:var(--slate); text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .fp-bar { position:absolute; left:0; right:0; bottom:0; height:3px; background:var(--line2); }
+  .fp-bar i { display:block; height:100%; background:var(--acc); }
+
+  .rd-body { display:grid; grid-template-columns:minmax(0,1.55fr) minmax(0,1fr); gap:18px; align-items:start; }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:15px 16px; margin-bottom:16px; }
+  .panel-h { display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin-bottom:12px; }
+  .panel-h h3 { font-size:14px; font-weight:600; }
+  .panel-h .meta { font:11px "IBM Plex Mono",monospace; color:var(--mut); }
+  .panel-h .live { color:var(--ok); font:600 10px "IBM Plex Mono",monospace; letter-spacing:.5px; }
+  .legend { display:flex; gap:10px; font:600 9px "IBM Plex Mono",monospace; color:var(--mut); }
+
+  /* tasks */
+  .tgroup { margin-top:14px; } .tgroup:first-child { margin-top:0; }
+  .tgroup-h { display:flex; justify-content:space-between; align-items:center;
+              font:600 10px/1 "IBM Plex Mono",monospace; letter-spacing:1.5px; text-transform:uppercase; color:var(--slate);
+              border-left:3px solid var(--acc); padding-left:8px;
+              border-bottom:1px solid var(--line); padding-bottom:6px; margin-bottom:8px; }
+  .tgroup-meta { color:var(--mut); letter-spacing:.5px; }
+  .task { padding:8px 10px; border-radius:7px; margin-bottom:4px; border:1px solid transparent; }
+  .task.active { background:var(--hi); border-color:#d4e2ff; border-left:3px solid var(--acc); padding-left:9px; }
+  .task-head { display:flex; align-items:center; gap:8px; }
+  .task .cb { width:16px; height:16px; border-radius:50%; display:inline-grid; place-items:center; flex:0 0 auto;
+              border:1.5px solid var(--line); color:var(--mut); font-size:10px; }
+  .task .cb.done { background:var(--acc); border-color:var(--acc); color:#fff; }
+  .task .cb.cur  { border-color:var(--acc); color:var(--acc); }
+  .task .tid { font:600 12px "IBM Plex Mono",monospace; color:var(--slate); }
+  .task.active .tid { color:var(--acc); }
+  .task.is-done .task-body { color:var(--mut); }
+  .active-lbl { margin-left:auto; font:600 9px "IBM Plex Mono",monospace; letter-spacing:1px; color:var(--acc); }
+  .tag { font:600 9px/1.5 "IBM Plex Mono",monospace; letter-spacing:.5px; padding:1px 5px; border-radius:3px; }
+  .tag.p  { color:var(--acc); background:#e7efff; }
+  .tag.us { color:var(--slate); background:var(--line2); }
+  .task-body { margin:5px 0 0 24px; font-size:13px; color:var(--ink); }
+  .task-body code { white-space:normal; overflow-wrap:anywhere; } /* long identifiers must wrap, not overflow */
+  .task-path { margin:4px 0 0 24px; font:11px "IBM Plex Mono",monospace; color:var(--mut);
+               white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+  /* requirement / chips */
+  .req-text { font-size:13px; color:var(--slate); }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:11px; }
+  .chip { font:600 10px "IBM Plex Mono",monospace; color:var(--slate); background:var(--line2);
+          border:1px solid var(--line); border-radius:5px; padding:3px 8px; }
+
+  /* activity feed */
+  .frow { display:flex; gap:8px; padding:4px 0; border-bottom:1px dashed var(--line2); font:11px "IBM Plex Mono",monospace; }
+  .frow:last-child { border-bottom:0; }
+  .frow .ftime { color:var(--mut); flex:0 0 auto; } .frow .fdot { color:var(--acc); flex:0 0 auto; }
+  .frow span:last-child { color:var(--slate); overflow:hidden; text-overflow:ellipsis; }
+
+  /* artifacts */
+  .arow { display:flex; justify-content:space-between; gap:12px; padding:6px 0; border-bottom:1px dashed var(--line2);
+          font:11px "IBM Plex Mono",monospace; }
+  .arow:last-child { border-bottom:0; }
+  .arow .ak { color:var(--mut); letter-spacing:.5px; } .arow .av { color:var(--ink); text-align:right;
+              overflow:hidden; text-overflow:ellipsis; max-width:62%; white-space:nowrap; }
+
+  /* progress */
+  .prog-top { display:flex; justify-content:space-between; font:11px "IBM Plex Mono",monospace; color:var(--mut); margin-bottom:7px; }
+  .prog { height:7px; border-radius:4px; background:var(--line2); overflow:hidden; }
+  .prog i { display:block; height:100%; background:var(--acc); border-radius:4px; }
+
+  .blocked { margin:14px 0; padding:12px 14px; border:1px solid #f0c8c3; background:#fbeeec; border-radius:8px; }
+  .blocked p { color:var(--bad); font:12px "IBM Plex Mono",monospace; margin-bottom:9px; }
+  .empty { color:var(--mut); font-size:12px; padding:6px 0; }
+
+  @media (max-width:820px) {
+    .rd-body { grid-template-columns:1fr; } .rd-meta { grid-template-columns:repeat(3,1fr); }
+    .fp { grid-template-columns:repeat(3,1fr); } .ghost { display:none; }
+    .rd-hero .ring { position:static; }
+  }
 </style>
 </head>
 <body>
-<header><b>autodev<i>_</i></b> <span id="counts"></span></header>
+<header>
+  <a class="hdr-back" id="navback" style="visibility:hidden" onclick="closeDetail()">← assembly line</a>
+  <b>autodev<i>_</i></b>
+  <div class="hdr-right"><span id="counts"></span><span id="clock"></span>
+    </div>
+</header>
 <div id="board"></div>
 <div id="detail"></div>
-<div id="ticker">● LIVE</div>
-<script>
-const TITLES = ['Spec','Analyze','Implement','Push','Review','Test'];
-let runs = [], open = null;
+<div id="ticker"><span class="dot">●</span> LIVE</div>
 
-// ponytail: server fields (slug/repo/worktree/blocked_reason/pr_url/event detail) are
+<script>
+const TITLES = ['Spec','Analyze','Implement','Verify','Push','Review','Test'];
+const WD = ['SUN','MON','TUE','WED','THU','FRI','SAT'];
+const MO = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
+let runs = [], open = null, openRun = null;
+
+// ponytail: server fields (slug/repo/worktree/blocked_reason/pr_url/task text/event detail) are
 // user-supplied and land in innerHTML — escape before interpolating to block stored XSS.
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+const timeOf = (ts) => new Date(ts).toLocaleTimeString('en-US', { hour12:false });
+function fmtClock() {
+  const d = new Date();
+  return `${WD[d.getDay()]} ${String(d.getDate()).padStart(2,'0')} ${MO[d.getMonth()]} · ${d.toLocaleTimeString('en-US',{hour12:false})}`;
+}
+function human(ms) { // "51s" / "3m 18s" / "1h 4m"
+  const s = Math.max(0, Math.floor(ms/1000));
+  if (s < 60) return s+'s';
+  if (s < 3600) return `${Math.floor(s/60)}m ${s%60}s`;
+  return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
+}
+function clock(ms) { // "3:18"
+  if (!isFinite(ms) || ms < 0) return '—';
+  const s = Math.floor(ms/1000);
+  if (s < 3600) return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+  return `${Math.floor(s/3600)}h${Math.floor((s%3600)/60)}m`;
 }
 
 async function load() {
@@ -56,48 +253,314 @@ async function load() {
 function render() {
   const counts = { RUNNING:0, BLOCKED:0, DONE:0 };
   runs.forEach(r => counts[r.status] = (counts[r.status]||0)+1);
-  document.getElementById('counts').textContent =
+  document.getElementById('counts').innerHTML =
+    `<span class="dot" style="color:${counts.RUNNING?'var(--ok)':'var(--mut)'}">●</span> ` +
     `${counts.RUNNING||0} running · ${counts.BLOCKED||0} blocked · ${counts.DONE||0} done`;
   const board = document.getElementById('board');
   board.innerHTML = TITLES.map((t,i) => `<div class="col"><h4>0${i+1} ${t}</h4>${
     runs.filter(r => r.stage === i+1 && r.status !== 'DONE').map(r => `
       <div class="card ${esc(r.status)}" onclick="renderDetail(${r.id})">
-        <b>#${String(r.id).padStart(3,'0')} ${esc(r.slug)}</b><br>
+        <b>#${String(r.id).padStart(3,'0')} ${esc(r.slug)}</b>
+        ${r.issue_type ? `<span class="badge ${esc(r.issue_type)}">${esc(r.issue_type.toUpperCase())}</span>` : ''}<br>
         <span class="repo">${esc(r.repo)} · ${esc(r.status)}</span>
         <div class="st">${r.status==='BLOCKED' ? '■ '+esc(r.blocked_reason||'') : ''}</div>
       </div>`).join('')
   }</div>`).join('');
 }
+
+function closeDetail() {
+  open = null; openRun = null;
+  document.getElementById('detail').className = '';
+  document.getElementById('board').style.display = 'grid';
+  document.getElementById('navback').style.visibility = 'hidden';
+}
+
+// stage n -> {start, end} from the timestamped lifecycle events — real per-stage timings.
+function stageTimes(events) {
+  const t = {};
+  for (const e of events || []) {
+    if (e.type === 'stage_started') (t[e.stage] = t[e.stage] || {}).start = e.ts;
+    if (e.type === 'stage_done')    (t[e.stage] = t[e.stage] || {}).end   = e.ts;
+  }
+  return t;
+}
+function ringSvg(stage) {
+  const r = 26, C = 2*Math.PI*r, off = C*(1 - Math.min(stage,7)/7);
+  return `<svg width="72" height="72" viewBox="0 0 72 72" class="ring">
+    <circle cx="36" cy="36" r="${r}" fill="none" stroke="var(--line)" stroke-width="5"/>
+    <circle cx="36" cy="36" r="${r}" fill="none" stroke="var(--acc)" stroke-width="5" stroke-linecap="round"
+      stroke-dasharray="${C.toFixed(2)}" stroke-dashoffset="${off.toFixed(2)}" transform="rotate(-90 36 36)"/>
+    <text x="36" y="34" text-anchor="middle" class="ring-n">${stage}/7</text>
+    <text x="36" y="45" text-anchor="middle" class="ring-l">STAGE</text></svg>`;
+}
+
+const CODE_EXT = /\.(java|js|jsx|ts|tsx|py|go|rs|rb|kt|sh|sql|ya?ml|json|xml|md|toml|gradle|properties)$/i;
+function taskRow(t, active) {
+  let raw = (t.text || '').replace(/(^|\s)\[P\]/, ' ').trim();
+  const tags = [];
+  if (/(^|\s)\[P\]/.test(t.text || '')) tags.push('<span class="tag p">P</span>');
+  const us = ((t.text || '').match(/\bUS\d\b/) || [])[0];
+  if (us) tags.push(`<span class="tag us">${us}</span>`);
+  // ponytail: heuristic — a trailing token ending in a known code extension is the task's file path
+  let path = '';
+  const pm = raw.match(/(?:^|\s)`?([\w@./-]+)`?\s*$/);
+  if (pm && CODE_EXT.test(pm[1])) { path = pm[1]; raw = raw.slice(0, pm.index).trim(); }
+  const bodyHtml = esc(raw).replace(/`([^`]+)`/g, '<code>$1</code>'); // backticks survive esc(); inner already escaped
+  const mark = t.done ? '<span class="cb done">✓</span>'
+             : active ? '<span class="cb cur">▸</span>' : '<span class="cb">○</span>';
+  return `<div class="task${active ? ' active' : ''}${t.done ? ' is-done' : ''}">
+    <div class="task-head">${mark}<b class="tid">${esc(t.id)}</b>${tags.join('')}
+      ${active ? '<span class="active-lbl">ACTIVE</span>' : ''}</div>
+    <div class="task-body">${bodyHtml || '&mdash;'}</div>
+    ${path ? `<div class="task-path">${esc(path)}</div>` : ''}</div>`;
+}
+function renderTasks(tasks) {
+  if (!tasks.length) return '<div class="empty">no tasks parsed yet — appears once stage 1 writes tasks.md</div>';
+  const activeId = (tasks.find(t => !t.done) || {}).id;
+  const order = [], map = new Map();
+  tasks.forEach(t => { const g = t.group || ''; if (!map.has(g)) { map.set(g, []); order.push(g); } map.get(g).push(t); });
+  return order.map(g => {
+    const items = map.get(g), done = items.filter(t => t.done).length, ids = items.map(t => t.id);
+    const range = ids.length > 1 ? `${ids[0]}–${ids[ids.length-1]}` : (ids[0] || '');
+    const label = g ? esc(g.replace(/^phase\s*\d+:\s*/i, '').toUpperCase()) : 'TASKS';
+    return `<div class="tgroup"><div class="tgroup-h"><span>${label}</span>
+      <span class="tgroup-meta">${range} · ${done}/${items.length}</span></div>
+      ${items.map(t => taskRow(t, t.id === activeId)).join('')}</div>`;
+  }).join('');
+}
+
+const fmtTok = (n) => n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1000 ? (n/1000).toFixed(1)+'k' : String(n);
+// stage n -> summed telemetry from metrics events (one per claude call — retries included)
+function stageMetrics(events) {
+  const m = {};
+  for (const e of events || []) {
+    if (e.type !== 'metrics') continue;
+    const s = m[e.stage] = m[e.stage] || { tin:0, tout:0, cost:0, models:new Set(), calls:0 };
+    s.tin += e.tokens_in || 0; s.tout += e.tokens_out || 0; s.cost += e.cost_usd || 0;
+    if (e.model) e.model.split(' + ').forEach(x => s.models.add(x));
+    s.calls++;
+  }
+  return m;
+}
+// Flight plan: stepper + per-stage telemetry merged — seven clickable cards, real data only.
+const STAGE_DESC = {
+  1: 'Write the spec set — spec.md, plan.md, tasks.md (repro-first for bug runs).',
+  2: 'Quality gate: verify every checklist item against the spec documents before any code.',
+  3: 'Implement tasks.md task by task, test-driven, committing and ticking each task.',
+  4: 'Verify implementation against the spec — task truthfulness, FR coverage, spec intent; PASS required.',
+  5: 'Commit, push with upstream tracking, open the pull request.',
+  6: 'Review⇄fix loop — APPROVE verdict required to pass.',
+  7: 'Run the detected test suite; green suite closes the run.',
+};
+let fpCache = null, selStage = null;
+const skippedSet = (r) => new Set(String(r.skipped || '').split(',').filter(Boolean).map(Number));
+function stageState(r, n) {
+  if (skippedSet(r).has(n)) return 'skipped'; // takes precedence — a skipped stage is never "done"
+  if (r.status === 'DONE') return 'done';
+  if (n < r.stage) return 'done';
+  if (n === r.stage) return r.status === 'BLOCKED' ? 'failed' : 'cur';
+  return 'queued';
+}
+const ST_LABEL = { done: '● COMPLETE', cur: '● IN PROGRESS', failed: '■ FAILED', queued: '○ PENDING', skipped: '– SKIPPED' };
+function flightPlan(r, events, st) {
+  const sm = stageMetrics(events);
+  const meta = r.stage_meta || TITLES.map((t,i) => ({ n:i+1, title:t, skill:null }));
+  fpCache = { r, st, sm, meta };
+  const totTok = Object.values(sm).reduce((a,s)=>a+s.tin+s.tout,0);
+  const totCost = Object.values(sm).reduce((a,s)=>a+s.cost,0);
+  const maxTok = Math.max(1, ...Object.values(sm).map(s=>s.tin+s.tout));
+  const cards = meta.map(s => {
+    const m = sm[s.n], n = s.n, state = stageState(r, n);
+    let dur = '';
+    if (state === 'done' && st[n]?.start && st[n]?.end) dur = clock(st[n].end - st[n].start);
+    else if ((state === 'cur' || state === 'failed') && st[n]?.start) dur = r.status === 'RUNNING'
+      ? `<span id="live-stage" data-start="${st[n].start}">${clock(Date.now() - st[n].start)}</span>`
+      : clock(r.updated_at - st[n].start);
+    const tok = m ? fmtTok(m.tin + m.tout) + (m.cost ? ' · $' + m.cost.toFixed(2) : '') : (state === 'queued' ? 'queued' : '—');
+    return `<div class="fp-card ${state}${selStage === n ? ' sel' : ''}" onclick="openStage(${n})">
+      <div class="fp-t"><span class="n"><span class="idx">${state==='done' ? '✓' : state==='skipped' ? '–' : '0'+n}</span> ${esc(s.title)}</span>
+        <span class="dur">${dur}</span></div>
+      <div class="fp-st ${state}">${ST_LABEL[state]}</div>
+      <div class="fp-r"><span class="k">SKILL</span><span class="v">${s.skill ? esc(s.skill) : '—'}</span></div>
+      <div class="fp-r"><span class="k">MODEL</span><span class="v">${m && m.models.size ? esc([...m.models].join(' + ')) : '—'}</span></div>
+      <div class="fp-r"><span class="k">TOKENS</span><span class="v">${tok}</span></div>
+      <div class="fp-bar"><i style="width:${m ? Math.round((m.tin+m.tout)/maxTok*100) : 0}%"></i></div></div>`;
+  }).join('');
+  return `<div class="fp-head"><h3>Flight plan <span class="sub" style="text-transform:none;letter-spacing:0"> seven stages · skill / model / tokens · click a stage</span></h3>
+      <span class="tot">${totTok ? `run total <b>${fmtTok(totTok)} tok</b> · $${totCost.toFixed(2)}` : ''}</span></div>
+    <div class="fp">${cards}</div><div id="stage-x">${selStage ? stagePanel(selStage) : ''}</div>`;
+}
+function stagePanel(n) {
+  const { r, st, sm, meta } = fpCache;
+  const s = meta[n-1], m = sm[n], state = stageState(r, n);
+  const stCol = { done:'var(--ok)', cur:'var(--acc)', failed:'var(--bad)', queued:'var(--mut)', skipped:'var(--mut)' }[state];
+  // per-state actions — completed/skipped stages stay locked; a live (running) stage has nothing to resume/skip
+  const btn = (label, fn, cls='jump') => `<button class="${cls}" onclick="${fn}(${n})">${label}</button>`;
+  let actions = '';
+  if (state === 'queued') actions = btn('▶ START FROM HERE', 'jumpTo') + btn('⇥ SKIP', 'skipTo', 'jump skip');
+  else if (state === 'failed') actions = btn('▶ RESUME', 'jumpTo') + btn('⇥ SKIP', 'skipTo', 'jump skip');
+  return `<div class="sx ${state}">
+    <div class="sx-h"><h4>${esc(s.title)}</h4>
+      <span class="st" style="color:${stCol}">${ST_LABEL[state]}</span>
+      <button class="close" onclick="closeStage(event)">✕ CLOSE</button>
+      ${actions}</div>
+    <div class="sx-desc">${STAGE_DESC[n] || ''}${state==='failed' && r.blocked_reason ? ` <b style="color:var(--bad)">■ ${esc(r.blocked_reason)}</b>` : ''}</div>
+    <div class="sx-meta">
+      <span><span class="k">Skill</span>${s.skill ? esc(s.skill) : '—'}</span>
+      <span><span class="k">Model</span>${m && m.models.size ? esc([...m.models].join(' + ')) : '—'}</span>
+      <span><span class="k">Tokens</span>${m ? fmtTok(m.tin + m.tout) + (m.cost ? ' · $' + m.cost.toFixed(2) : '') : (state==='queued' ? 'queued' : '—')}</span>
+      <span><span class="k">Duration</span>${st[n]?.start && st[n]?.end ? clock(st[n].end - st[n].start) : (st[n]?.start ? 'running' : '—')}</span>
+      <span><span class="k">Claude calls</span>${m ? m.calls : 0}</span></div></div>`;
+}
+function openStage(n) {
+  selStage = selStage === n ? null : n;
+  document.querySelectorAll('.fp-card').forEach((c,i) => c.classList.toggle('sel', i+1 === selStage));
+  document.getElementById('stage-x').innerHTML = selStage ? stagePanel(selStage) : '';
+}
+function closeStage(e) { e.stopPropagation(); selStage = null; openStage(null); }
+async function jumpTo(n) {
+  const { r } = fpCache;
+  if (!confirm(`Jump run #${r.id} to stage ${n} (${TITLES[n-1]})?\nThe runner restarts from that stage.`)) return;
+  const res = await fetch(`/api/runs/${r.id}/jump`, { method:'POST',
+    headers:{'content-type':'application/json'}, body: JSON.stringify({ stage: n }) });
+  const out = await res.json();
+  if (!res.ok) return alert(out.error || 'jump failed');
+  selStage = null; load();
+}
+async function skipTo(n) {
+  const { r } = fpCache;
+  if (!confirm(`Skip stage ${n} (${TITLES[n-1]}) for run #${r.id}?\nIt won't run; the pipeline continues past it.`)) return;
+  const res = await fetch(`/api/runs/${r.id}/skip`, { method:'POST',
+    headers:{'content-type':'application/json'}, body: JSON.stringify({ stage: n }) });
+  const out = await res.json();
+  if (!res.ok) return alert(out.error || 'skip failed');
+  selStage = null; load();
+}
+
+const VERB = { stage_started:'stage started', stage_done:'stage done', pr_opened:'PR opened',
+               run_done:'run done', parked:'blocked', resumed:'resumed', retry:'retry', skipped:'skipped', activity:'' };
+function feedRow(e) {
+  const verb = VERB[e.type] ?? e.type;
+  const detail = e.detail ? (verb ? ' — ' + esc(e.detail) : esc(e.detail)) : '';
+  return `<div class="frow"><span class="ftime">${timeOf(e.ts)}</span><span class="fdot">▸</span>
+    <span>${esc(verb)}${detail}</span></div>`;
+}
+
 async function renderDetail(id) {
   open = id;
-  const r = await (await fetch('/api/runs/'+id)).json();
+  const r = await (await fetch('/api/runs/' + id)).json();
+  openRun = r;
+  const tasks = r.tasks || [], events = r.events || [];
+  const st = stageTimes(events);
+  const doneCount = tasks.filter(t => t.done).length;
+  const activeId = (tasks.find(t => !t.done) || {}).id;
+  const retries = events.filter(e => e.type === 'retry').length;
+  const stories = new Set(); tasks.forEach(t => { const m = (t.text||'').match(/\bUS\d\b/); if (m) stories.add(m[0]); });
+  const phases = new Set(tasks.map(t => t.group).filter(Boolean));
+
+  const meta = [
+    ['Started', timeOf(r.created_at)],
+    ['Elapsed', `<span id="m-elapsed">${human((r.status==='RUNNING'?Date.now():r.updated_at) - r.created_at)}</span>`],
+    ['Retries', String(retries)],
+    ['Branch', esc(r.branch)],
+    ['Updated', timeOf(r.updated_at)],
+    ['Trigger', 'autodev'],
+  ];
+
+  // one-line summary: first sentence of the requirement, capped
+  const sent = (r.requirement || '').replace(/^\[[A-Z0-9-]+\]\s*/, '').split(/(?<=[.!?])\s/)[0];
+  let summary = sent.length > 180 ? sent.slice(0, 180).replace(/\s+\S*$/, '') + '…' : sent;
+  if (summary.trim() === r.slug) summary = ''; // requirement was just the slug — nothing to add
+
+  const chips = [`${tasks.length} tasks`, stories.size && `${stories.size} user stories`,
+                 phases.size && `${phases.size} phases`].filter(Boolean)
+                 .map(c => `<span class="chip">${esc(c)}</span>`).join('');
+
+  const artifacts = [
+    ['Worktree', esc(r.worktree)],
+    ['Branch', esc(r.branch)],
+    ['Pull request', r.pr_url
+      ? (/^https?:\/\//i.test(r.pr_url) ? `<a href="${esc(r.pr_url)}">${esc(r.pr_url)}</a>` : esc(r.pr_url))
+      : 'opens at Push stage'],
+  ].map(([k,v]) => `<div class="arow"><span class="ak">${k.toUpperCase()}</span><span class="av">${v}</span></div>`).join('');
+
+  const pct = tasks.length ? Math.round(doneCount/tasks.length*100) : 0;
+
   const d = document.getElementById('detail');
   d.className = 'open';
   document.getElementById('board').style.display = 'none';
-  let firstUndoneMarked = false;
-  const tasks = (r.tasks||[]).map(t => {
-    const mark = t.done ? '✓' : (firstUndoneMarked ? '○' : (firstUndoneMarked = true, '▶'));
-    return `<div>${mark} ${esc(t.id)} ${esc(t.text)}</div>`;
-  }).join('');
-  const feed = (r.events||[]).slice(-30).reverse().map(e =>
-    `<div>${new Date(e.ts).toLocaleTimeString()} ${esc(e.type)} ${esc(e.detail??'')}</div>`).join('');
+  document.getElementById('navback').style.visibility = 'visible';
+  const num = String(r.id).padStart(3,'0');
   d.innerHTML = `
-    <a class="back" onclick="open=null;this.parentElement.className='';document.getElementById('board').style.display='grid'">← assembly line</a>
-    <h1>#${String(r.id).padStart(3,'0')} · ${esc(r.slug)}</h1>
-    <div class="mono">${esc(r.status)} · stage ${r.stage}/6 · ${esc(r.worktree)} ${r.pr_url ? (/^https?:\/\//i.test(r.pr_url) ? '· <a href="'+esc(r.pr_url)+'">PR</a>' : '· '+esc(r.pr_url)) : ''}</div>
-    <div id="stepper">${TITLES.map((t,i) =>
-      `<span class="${i+1 < r.stage ? 'done' : i+1 === r.stage ? 'cur' : ''}">${i+1 < r.stage ? '✓' : i+1} ${t}</span>`).join(' — ')}</div>
-    ${r.status==='BLOCKED' ? `<p class="mono" style="color:var(--bad)">■ ${esc(r.blocked_reason)}</p>
-      <button onclick="alert('Run: autodev resume ${r.id}')">Resume</button>` : ''}
-    <div id="cols"><div><h3>Tasks</h3><div id="tasks">${tasks||'<div>—</div>'}</div></div>
-    <div><h3>Activity</h3><div id="feed">${feed}</div></div></div>`;
+    <div class="rd-hero">
+      <div class="ghost">${num}</div>
+      ${ringSvg(r.stage)}
+      <div class="rd-crumb"><span>Run Nº ${num}</span><i>/</i><b>${esc(r.repo)}</b><i>/</i><span>worktree run-${num}</span></div>
+      <div class="rd-title">${esc(r.slug)}</div>
+      <div class="rd-summary">${esc(summary)}</div>
+      <div class="rd-status">
+        <span class="live-st ${esc(r.status)}">● ${esc(r.status)}</span>
+        ${r.issue_type ? `<span class="badge ${esc(r.issue_type)}">${esc(r.issue_type.toUpperCase())}</span>` : ''}
+        ${r.jira_key ? `<span><a class="mono" href="${esc(r.jira_base)}/browse/${esc(r.jira_key)}" target="_blank">${esc(r.jira_key)} ↗</a></span>` : ''}
+        <span>Stage ${r.stage} of 7 — <b>${TITLES[r.stage-1] || ''}</b></span>
+        <span class="wt mono">${esc(r.worktree)}</span>
+      </div>
+    </div>
+
+    <div class="rd-meta">${meta.map(([k,v]) => `<div><div class="k">${k}</div><div class="v">${v}</div></div>`).join('')}</div>
+
+    ${r.status==='BLOCKED' ? `<div class="blocked"><p>■ ${esc(r.blocked_reason)}</p>
+      <button onclick="alert('Run: autodev resume ${r.id}')">Resume</button></div>` : ''}
+
+    ${flightPlan(r, events, st)}
+
+    <div class="rd-body" style="margin-top:18px">
+      <div class="panel">
+        <div class="panel-h"><h3>Tasks</h3>
+          <span class="meta">tasks.md · ${tasks.length} tasks${activeId ? ` · ${esc(activeId)} in progress` : ''}</span></div>
+        <div class="legend"><span>[P] parallel-safe</span><span>[US] user story</span></div>
+        <div style="margin-top:10px">${renderTasks(tasks)}</div>
+      </div>
+      <div>
+        <div class="panel">
+          <div class="panel-h"><h3>Requirement</h3><span class="meta">spec.md</span></div>
+          <div class="req-text">${esc(r.requirement)}</div>
+          <div class="chips">${chips}</div>
+        </div>
+        <div class="panel">
+          <div class="panel-h"><h3>Activity</h3><span class="live">● live feed</span></div>
+          ${(f => f.length ? f.slice(-14).reverse().map(feedRow).join('') : '<div class="empty">no activity yet</div>')(events.filter(e => e.type !== 'metrics'))}
+        </div>
+        <div class="panel">
+          <div class="panel-h"><h3>Artifacts</h3></div>
+          ${artifacts}
+        </div>
+        <div class="panel">
+          <div class="panel-h"><h3>Task progress</h3><span class="meta">${activeId ? '1 active' : '—'}</span></div>
+          <div class="prog-top"><span>${doneCount} / ${tasks.length} done</span><span>${pct}%</span></div>
+          <div class="prog"><i style="width:${pct}%"></i></div>
+        </div>
+      </div>
+    </div>`;
 }
+
 new EventSource('/stream').onmessage = (m) => {
   const e = JSON.parse(m.data);
-  document.getElementById('ticker').textContent =
-    `● LIVE  ${new Date(e.ts).toLocaleTimeString()}  #${e.run} ${e.type} ${e.detail??''}`;
+  document.getElementById('ticker').innerHTML =
+    `<span class="dot">●</span> LIVE  ${timeOf(e.ts)}  #${e.run} ${esc(e.type)} ${esc(e.detail ?? '')}`;
   load();
 };
+
+// 1s tick: header clock always; live elapsed + current-stage timer when a running detail is open.
+setInterval(() => {
+  document.getElementById('clock').textContent = fmtClock();
+  if (openRun && openRun.status === 'RUNNING') {
+    const el = document.getElementById('m-elapsed'); if (el) el.textContent = human(Date.now() - openRun.created_at);
+    const ls = document.getElementById('live-stage'); if (ls) ls.textContent = clock(Date.now() - Number(ls.dataset.start));
+  }
+}, 1000);
+
+document.getElementById('clock').textContent = fmtClock();
 load();
 </script>
 </body>

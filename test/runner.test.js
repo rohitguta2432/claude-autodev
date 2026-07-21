@@ -23,6 +23,8 @@ case "$prompt" in
   *executing-plans*) perl -i -pe 's/- \\[ \\]/- [x]/' specs/001-x/tasks.md
     git add -A; git -c user.email=t@t -c user.name=t commit -qm impl ;;
   *ce-commit-push-pr*) git push -q -u origin HEAD ;;
+  *speckit.verify*) mkdir -p .autodev
+    echo '{"verdict":"PASS","findings":[]}' > .autodev/verify.json ;;
   *code-review*) mkdir -p .autodev
     echo '{"verdict":"APPROVE","findings":[]}' > .autodev/review.json ;;
   *) exit 0 ;;
@@ -40,7 +42,7 @@ function makeRepoWithWorktree() {
   return wt;
 }
 
-test('runner drives a run through all six stages to DONE', () => {
+test('runner drives a run through all seven stages to DONE', () => {
   const db = openDb();
   const wt = makeRepoWithWorktree();
   const id = createRun(db, { slug: 'x', repo: 'demo', repo_path: wt, worktree: wt, branch: 'autodev/001-x', requirement: 'demo feature' });
@@ -66,7 +68,7 @@ test('runner parks a run when a stage keeps failing, resume re-enters at that st
   const db2 = openDb();
   const run = getRun(db2, id); db2.close();
   assert.equal(run.status, 'BLOCKED');
-  assert.equal(run.stage, 5);
+  assert.equal(run.stage, 6);
   assert.ok(existsSync(join(runDir(id), 'blocked.md')));
   // internal review budget (3 rounds + 2 fixes) must not be multiplied by outer retries
   const reviewCalls = readFileSync(join(stubDir, 'calls'), 'utf8')

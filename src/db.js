@@ -18,21 +18,31 @@ export function openDb(path = join(AUTODEV_HOME(), 'autodev.db')) {
     status TEXT NOT NULL DEFAULT 'RUNNING',
     stage INTEGER NOT NULL DEFAULT 1,
     pid INTEGER, pr_url TEXT, blocked_reason TEXT,
+    jira_key TEXT, issue_type TEXT, skipped TEXT,
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
+  // migrate pre-existing DBs — ALTER is a no-op error when the column already exists
+  for (const col of ['jira_key TEXT', 'issue_type TEXT', 'skipped TEXT']) {
+    try { db.exec(`ALTER TABLE runs ADD COLUMN ${col}`); } catch { /* already there */ }
+  }
   return db;
 }
 
 export function createRun(db, r) {
   const now = Date.now();
   const res = db.prepare(`INSERT INTO runs
-    (slug, repo, repo_path, worktree, branch, requirement, stage, created_at, updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?)`)
-    .run(r.slug, r.repo, r.repo_path, r.worktree, r.branch, r.requirement, r.stage ?? 1, now, now);
+    (slug, repo, repo_path, worktree, branch, requirement, stage, jira_key, issue_type, created_at, updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(r.slug, r.repo, r.repo_path, r.worktree, r.branch, r.requirement, r.stage ?? 1,
+         r.jira_key ?? null, r.issue_type ?? null, now, now);
   return Number(res.lastInsertRowid);
 }
 
 export const getRun = (db, id) => db.prepare('SELECT * FROM runs WHERE id = ?').get(id);
-export const listRuns = (db) => db.prepare('SELECT * FROM runs ORDER BY id DESC').all();
+// Stages the user skipped from the dashboard — stored as a comma-joined string on the run row.
+export const skippedSet = (run) => new Set(String(run?.skipped || '').split(',').filter(Boolean).map(Number));
+// In-progress first, then blocked, then everything else; newest-first within each group.
+export const listRuns = (db) => db.prepare(
+  `SELECT * FROM runs ORDER BY CASE status WHEN 'RUNNING' THEN 0 WHEN 'BLOCKED' THEN 1 ELSE 2 END, id DESC`).all();
 
 export function updateRun(db, id, fields) {
   const keys = Object.keys(fields);

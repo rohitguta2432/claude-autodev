@@ -24,6 +24,7 @@ case "$prompt" in
   *executing-plans*) perl -i -pe 's/- \\[ \\]/- [x]/' specs/001-x/tasks.md
     git add -A; git -c user.email=t@t -c user.name=t commit -qm impl ;;
   *ce-commit-push-pr*) git push -q -u origin HEAD ;;
+  *speckit.verify*) mkdir -p .autodev; echo '{"verdict":"PASS","findings":[]}' > .autodev/verify.json ;;
   *code-review*) mkdir -p .autodev; echo '{"verdict":"APPROVE","findings":[]}' > .autodev/review.json ;;
   *) exit 0 ;;
 esac`);

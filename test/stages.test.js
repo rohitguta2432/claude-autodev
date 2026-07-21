@@ -13,7 +13,7 @@ function gitRepo() {
 }
 
 test('stage table shape', () => {
-  assert.deepEqual(STAGES.map(s => s.key), ['spec', 'analyze', 'implement', 'push', 'review', 'test']);
+  assert.deepEqual(STAGES.map(s => s.key), ['spec', 'analyze', 'implement', 'verify', 'push', 'review', 'test']);
   for (const s of STAGES) assert.ok(s.n >= 1 && s.title && typeof s.check === 'function');
 });
 
@@ -105,9 +105,21 @@ test('isCompleteSpecDir: true only when spec/plan/tasks all non-empty', () => {
 test('review check reads .autodev/review.json verdict', () => {
   const wt = gitRepo();
   mkdirSync(join(wt, '.autodev'), { recursive: true });
-  assert.throws(() => STAGES[4].check({ worktree: wt }), /review/i);
+  assert.throws(() => STAGES[5].check({ worktree: wt }), /review/i);
   writeFileSync(join(wt, '.autodev/review.json'), JSON.stringify({ verdict: 'REQUEST_CHANGES', findings: [{ t: 'x' }] }));
-  assert.throws(() => STAGES[4].check({ worktree: wt }), /REQUEST_CHANGES/);
+  assert.throws(() => STAGES[5].check({ worktree: wt }), /REQUEST_CHANGES/);
   writeFileSync(join(wt, '.autodev/review.json'), JSON.stringify({ verdict: 'APPROVE', findings: [] }));
-  STAGES[4].check({ worktree: wt }); // no throw
+  STAGES[5].check({ worktree: wt }); // no throw
+});
+
+test('verify check gates on .autodev/verify.json verdict and severity', () => {
+  const wt = gitRepo();
+  mkdirSync(join(wt, '.autodev'), { recursive: true });
+  assert.throws(() => STAGES[3].check({ worktree: wt }), /verify/i);
+  writeFileSync(join(wt, '.autodev/verify.json'), JSON.stringify({ verdict: 'FAIL', findings: [{ severity: 'CRITICAL' }] }));
+  assert.throws(() => STAGES[3].check({ worktree: wt }), /FAIL/);
+  writeFileSync(join(wt, '.autodev/verify.json'), JSON.stringify({ verdict: 'PASS', findings: [{ severity: 'HIGH' }] }));
+  assert.throws(() => STAGES[3].check({ worktree: wt }), /critical\/high/i); // PASS with HIGH finding still blocks
+  writeFileSync(join(wt, '.autodev/verify.json'), JSON.stringify({ verdict: 'PASS', findings: [{ severity: 'MEDIUM' }] }));
+  STAGES[3].check({ worktree: wt }); // no throw — MEDIUM/LOW don't gate
 });
