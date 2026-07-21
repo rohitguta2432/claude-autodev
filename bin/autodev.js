@@ -6,7 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { PORT, runDir, openDb, createRun, getRun, listRuns, updateRun } from '../src/db.js';
 import { emit } from '../src/events.js';
-import { specDirFor, isCompleteSpecDir } from '../src/stages.js';
+import { specDirFor, isCompleteSpecDir, STAGES } from '../src/stages.js';
+import { parseJiraRef, fetchIssue } from '../src/jira.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const base = () => `http://127.0.0.1:${PORT()}`;
@@ -39,19 +40,34 @@ function parseRunArgs(args) {
   let repoPath = process.cwd();
   let noSpawn = false;
   let specArg = null;
+  let branchArg = null;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--repo') { repoPath = args[++i]; }
     else if (a === '--spec') { specArg = args[++i]; }
+    else if (a === '--branch') { branchArg = args[++i]; }
     else if (a === '--no-spawn') { noSpawn = true; }
     else words.push(a);
   }
-  return { requirement: words.join(' '), repoPath: resolve(repoPath), noSpawn, specArg };
+  return { requirement: words.join(' '), repoPath: resolve(repoPath), noSpawn, specArg, branchArg };
 }
 
 if (cmd === 'run') {
-  const { requirement, repoPath, noSpawn, specArg } = parseRunArgs(rest);
-  if (!requirement) { console.error('usage: autodev run "<requirement>" [--repo <path>] [--spec <path>]'); process.exit(1); }
+  let { requirement, repoPath, noSpawn, specArg, branchArg } = parseRunArgs(rest);
+  if (!requirement) { console.error('usage: autodev run "<requirement>"|<JIRA-KEY> [--repo <path>] [--spec <path>] [--branch <name>]'); process.exit(1); }
+
+  // Jira mode: "autodev run CV-123" (or a browse URL) — resolve the ticket into the
+  // requirement before anything else, so spec matching and slug use the real summary.
+  const jiraKey = parseJiraRef(requirement);
+  let issueType = null, slugSource = requirement;
+  if (jiraKey) {
+    console.log(`fetching ${jiraKey} via atlassian-jira MCP…`);
+    const issue = fetchIssue(jiraKey); // throws with a clear re-auth hint on failure
+    requirement = issue.requirement;
+    issueType = issue.type;
+    slugSource = `${jiraKey} ${issue.summary}`;
+    console.log(`${jiraKey} [${issue.type}] ${issue.summary}`);
+  }
 
   // Resolve spec adoption before touching git/db so an invalid --spec creates nothing.
   let adoptedSpec = null; // repo-relative path, e.g. "specs/001-rate-limit"
@@ -74,13 +90,19 @@ if (cmd === 'run') {
   // ponytail: can race with a concurrent kickoff — accepted for now, no locking.
   const runs = listRuns(db);
   const nnn = String((runs[0]?.id ?? 0) + 1).padStart(3, '0');
-  const slug = slugify(requirement);
-  const branch = `autodev/${nnn}-${slug}`;
+  const slug = slugify(slugSource);
+  const branch = branchArg || `autodev/${nnn}-${slug}`;
   const wtRoot = process.env.AUTODEV_WORKTREES || join(homedir(), 'worktrees');
   const worktree = join(wtRoot, repo, `run-${nnn}`);
   mkdirSync(dirname(worktree), { recursive: true });
-  execFileSync('git', ['worktree', 'add', '-b', branch, worktree], { cwd: repoPath });
-  const id = createRun(db, { slug, repo, repo_path: repoPath, worktree, branch, requirement, stage: adoptedSpec ? 2 : 1 });
+  // --branch adopts an existing branch (local, or remote-tracking via git DWIM) into the
+  // worktree — no -b. Default mints a fresh autodev/NNN-slug branch off the repo's HEAD.
+  const wtAddArgs = branchArg
+    ? ['worktree', 'add', worktree, branch]
+    : ['worktree', 'add', '-b', branch, worktree];
+  execFileSync('git', wtAddArgs, { cwd: repoPath });
+  const id = createRun(db, { slug, repo, repo_path: repoPath, worktree, branch, requirement,
+    jira_key: jiraKey, issue_type: issueType, stage: adoptedSpec ? 2 : 1 });
   db.close();
   mkdirSync(runDir(id), { recursive: true });
   if (!noSpawn) spawnRunner(id);
@@ -90,7 +112,7 @@ if (cmd === 'run') {
   const db = openDb();
   const runs = listRuns(db);
   db.close();
-  for (const r of runs) console.log(`#${String(r.id).padStart(3, '0')} ${r.status.padEnd(8)} stage ${r.stage}/6  ${r.repo}  ${r.slug}${r.blocked_reason ? '  ⚠ ' + r.blocked_reason : ''}`);
+  for (const r of runs) console.log(`#${String(r.id).padStart(3, '0')} ${r.status.padEnd(8)} stage ${r.stage}/${STAGES.length}  ${r.repo}  ${r.slug}${r.blocked_reason ? '  ⚠ ' + r.blocked_reason : ''}`);
 } else if (cmd === 'resume') {
   const id = Number(rest[0]);
   await ensureServer();
@@ -120,5 +142,5 @@ if (cmd === 'run') {
     console.log(`installed skill: ${dest}`);
   }
 } else {
-  console.log('usage: autodev run "<requirement>" [--repo <path>] | status | resume <id> | stop <id> | install-skill');
+  console.log('usage: autodev run "<requirement>" [--repo <path>] [--spec <path>] [--branch <name>] | status | resume <id> | stop <id> | install-skill');
 }
