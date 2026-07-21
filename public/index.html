@@ -209,8 +209,7 @@
 <header>
   <a class="hdr-back" id="navback" style="visibility:hidden" onclick="closeDetail()">← assembly line</a>
   <b>autodev<i>_</i></b>
-  <div class="hdr-right"><span id="counts"></span><span id="clock"></span>
-    </div>
+  <div class="hdr-right"><span id="counts"></span><span id="clock"></span></div>
 </header>
 <div id="board"></div>
 <div id="detail"></div>
@@ -501,7 +500,9 @@ async function renderDetail(id) {
       <div class="rd-status">
         <span class="live-st ${esc(r.status)}">● ${esc(r.status)}</span>
         ${r.issue_type ? `<span class="badge ${esc(r.issue_type)}">${esc(r.issue_type.toUpperCase())}</span>` : ''}
-        ${r.jira_key ? `<span><a class="mono" href="${esc(r.jira_base)}/browse/${esc(r.jira_key)}" target="_blank">${esc(r.jira_key)} ↗</a></span>` : ''}
+        ${r.jira_key ? (r.jira_base
+          ? `<span><a class="mono" href="${esc(r.jira_base)}/browse/${esc(r.jira_key)}" target="_blank">${esc(r.jira_key)} ↗</a></span>`
+          : `<span class="mono">${esc(r.jira_key)}</span>`) : ''}
         <span>Stage ${r.stage} of 7 — <b>${TITLES[r.stage-1] || ''}</b></span>
         <span class="wt mono">${esc(r.worktree)}</span>
       </div>
