@@ -1,3 +1,13 @@
 node_modules/
 *.log
 .superpowers/
+.remember/
+
+# secrets — never commit credentials or local env
+.env
+.env.*
+*.pem
+*.key
+credentials*
+.claude/settings.local.json
+.mcp.json
