@@ -146,6 +146,16 @@ for (const stage of STAGES.filter(s => s.n >= run.stage && !skipped.has(s.n))) {
   }
   await ev({ type: 'stage_done', stage: stage.n, detail: stage.title });
 }
+// Review + Test are green — the stage-5 draft PR may now face reviewers.
+const finalRun = getRun(db, runId);
+if (finalRun.pr_url) {
+  try {
+    execFileSync('gh', ['pr', 'ready', finalRun.pr_url], { cwd: run.worktree, encoding: 'utf8', timeout: 30_000 });
+    await ev({ type: 'activity', stage: STAGES.at(-1).n, detail: 'draft PR marked ready for review' });
+  } catch {
+    await ev({ type: 'activity', stage: STAGES.at(-1).n, detail: 'could not mark PR ready (gh missing or not a draft) — check it manually' });
+  }
+}
 saveState({ status: 'DONE' });
 await ev({ type: 'run_done', stage: STAGES.at(-1).n });
 db.close();

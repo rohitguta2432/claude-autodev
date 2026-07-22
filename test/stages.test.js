@@ -161,3 +161,9 @@ test('verify check gates on .autodev/verify.json verdict and severity', () => {
   writeFileSync(join(wt, '.autodev/verify.json'), JSON.stringify({ verdict: 'PASS', findings: [{ severity: 'MEDIUM' }] }));
   STAGES[3].check({ worktree: wt }); // no throw — MEDIUM/LOW don't gate
 });
+
+test('push stage opens the PR as a DRAFT — review/test have not run at stage 5', () => {
+  const run = { branch: 'b', requirement: 'q', jira_key: null, issue_type: null };
+  assert.match(STAGES[4].prompt(run), /--draft/);
+  assert.match(STAGES[4].prompt(run), /DRAFT pull request/);
+});

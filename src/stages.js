@@ -128,7 +128,7 @@ export const STAGES = [
   },
   {
     n: 5, key: 'push', title: 'Push', skill: 'ce-commit-push-pr',
-    prompt: (run) => `Use the ce-commit-push-pr skill if it is installed; otherwise: ensure all work on the current branch (${run.branch}) is committed with clear conventional-commit messages, push the branch to the remote with upstream tracking (git push -u), and open a pull request with \`gh pr create\` (or equivalent).${run.jira_key ? ` Start the PR title with "${run.jira_key}: " so Jira auto-links it.` : ''} Write the PR URL (just the URL) to .autodev/pr-url in the repo root.`,
+    prompt: (run) => `Use the ce-commit-push-pr skill if it is installed; otherwise: ensure all work on the current branch (${run.branch}) is committed with clear conventional-commit messages, push the branch to the remote with upstream tracking (git push -u), and open a DRAFT pull request with \`gh pr create --draft\` (or equivalent) — review and tests have not run yet, so the PR must not appear ready.${run.jira_key ? ` Start the PR title with "${run.jira_key}: " so Jira auto-links it.` : ''} Write the PR URL (just the URL) to .autodev/pr-url in the repo root.`,
     check: (run) => {
       try { git(run.worktree, 'rev-parse --abbrev-ref @{u}'); }
       catch { throw new Error('branch has no upstream — push failed'); }
