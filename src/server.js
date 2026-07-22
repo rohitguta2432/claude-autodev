@@ -51,6 +51,19 @@ const body = (req) => new Promise((res, rej) => {
   req.on('end', () => { try { res(b ? JSON.parse(b) : {}); } catch { rej(new Error('bad json')); } });
 });
 
+// CSRF guard for mutating endpoints. Browser requests always carry Origin and/or
+// Sec-Fetch-Site; the CLI/runner/tests (non-browser fetch) send neither, so requests
+// with neither header are trusted local tooling. A cross-origin form POST (text/plain,
+// no preflight) from any web page would carry a foreign Origin — reject it, otherwise
+// it could spawn a detached runner (claude --dangerously-skip-permissions) in the worktree.
+function crossOrigin(req) {
+  const sfs = req.headers['sec-fetch-site'];
+  if (sfs && sfs !== 'same-origin' && sfs !== 'none') return true;
+  const origin = req.headers.origin;
+  if (!origin) return false;
+  try { return new URL(origin).host !== req.headers.host; } catch { return true; }
+}
+
 export async function startServer({ port = PORT(), dbPath } = {}) {
   const db = openDb(dbPath);
   const clients = new Set();
@@ -58,6 +71,7 @@ export async function startServer({ port = PORT(), dbPath } = {}) {
     const url = new URL(req.url, 'http://x');
     const json = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
     try {
+      if (req.method === 'POST' && crossOrigin(req)) return json(403, { error: 'cross-origin request rejected' });
       if (req.method === 'POST' && url.pathname === '/runs')
         return json(201, { id: createRun(db, await body(req)) });
       if (req.method === 'POST' && url.pathname === '/events') {

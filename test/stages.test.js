@@ -59,6 +59,24 @@ test('detectTestCmd finds npm script / pytest / mvn / none', () => {
   assert.equal(detectTestCmd(mkdtempSync(join(tmpdir(), 'p-'))), null);
 });
 
+test('detectTestCmd finds gradle at root and markers one level down', () => {
+  const g = mkdtempSync(join(tmpdir(), 'p-'));
+  writeFileSync(join(g, 'build.gradle'), '');
+  assert.equal(detectTestCmd(g), 'gradle test');
+  writeFileSync(join(g, 'gradlew'), '');
+  assert.match(detectTestCmd(g), /gradlew(\.bat)? test$/);
+  // marker only in a subdir → command cd's into it
+  const m = mkdtempSync(join(tmpdir(), 'p-'));
+  mkdirSync(join(m, 'backend'));
+  writeFileSync(join(m, 'backend', 'pytest.ini'), '');
+  assert.equal(detectTestCmd(m), `cd ${JSON.stringify(join(m, 'backend'))} && pytest -q`);
+  // dotdirs and node_modules are never scanned
+  const n = mkdtempSync(join(tmpdir(), 'p-'));
+  mkdirSync(join(n, 'node_modules', 'x'), { recursive: true });
+  writeFileSync(join(n, 'node_modules', 'x', 'pytest.ini'), '');
+  assert.equal(detectTestCmd(n), null);
+});
+
 function completeSpec(wt, dirName) {
   const d = join(wt, 'specs', dirName);
   mkdirSync(d, { recursive: true });

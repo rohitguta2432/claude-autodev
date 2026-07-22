@@ -143,3 +143,25 @@ test('POST /api/runs/:id/skip records a pending skip and completes on last-stage
   assert.equal(run.status, 'DONE');
   assert.equal(run.skipped, '7');
 });
+
+test('cross-origin POSTs are rejected, headerless (CLI) and same-origin POSTs pass', async () => {
+  // browser cross-site form POST: foreign Origin, no preflight
+  const foreign = await fetch(`${base}/events`, { method: 'POST',
+    headers: { 'content-type': 'text/plain', origin: 'https://evil.example' },
+    body: JSON.stringify({ run: 1, type: 'activity' }) });
+  assert.equal(foreign.status, 403);
+  const sfs = await fetch(`${base}/api/runs/1/skip`, { method: 'POST',
+    headers: { 'content-type': 'application/json', 'sec-fetch-site': 'cross-site' },
+    body: JSON.stringify({ stage: 3 }) });
+  assert.equal(sfs.status, 403);
+  // dashboard's own fetch: same-origin markers pass the guard
+  const same = await fetch(`${base}/events`, { method: 'POST',
+    headers: { 'content-type': 'application/json', origin: `http://127.0.0.1:${port}`, 'sec-fetch-site': 'same-origin' },
+    body: JSON.stringify({ run: 1, type: 'activity', stage: 1 }) });
+  assert.equal(same.status, 200);
+  // CLI/runner: no browser headers at all — trusted local tooling (covered implicitly
+  // by every other test in this file, asserted once explicitly here)
+  const cli = await fetch(`${base}/events`, { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ run: 1, type: 'activity', stage: 1 }) });
+  assert.equal(cli.status, 200);
+});

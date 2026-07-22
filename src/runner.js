@@ -29,9 +29,11 @@ writeFileSync(hooksFile, JSON.stringify({ hooks: { PostToolUse: [{ matcher: 'Edi
 
 function runClaude(prompt, stageN) {
   const bin = process.env.AUTODEV_CLAUDE_BIN || 'claude';
+  const model = process.env.AUTODEV_CLAUDE_MODEL; // pin a (cheaper) model for every stage session
   const args = process.env.AUTODEV_CLAUDE_BIN
     ? ['-p', prompt] // stub in tests
-    : ['-p', prompt, '--dangerously-skip-permissions', '--settings', hooksFile, '--output-format', 'json'];
+    : ['-p', prompt, '--dangerously-skip-permissions', '--settings', hooksFile, '--output-format', 'json',
+       ...(model ? ['--model', model] : [])];
   const raw = execFileSync(bin, args, {
     cwd: run.worktree, encoding: 'utf8', timeout: CFG.stageTimeoutMin * 60_000,
     env: { ...process.env, AUTODEV_RUN: String(runId), AUTODEV_RUN_DIR: ctx.runDir,

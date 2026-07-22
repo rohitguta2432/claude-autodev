@@ -44,9 +44,36 @@ export function detectTestCmd(dir) {
   }
   if (has('pytest.ini') || has('pyproject.toml')) return 'pytest -q';
   if (has('pom.xml')) return 'mvn -q test';
+  if (has('build.gradle') || has('build.gradle.kts'))
+    return has('gradlew') ? `${process.platform === 'win32' ? 'gradlew.bat' : './gradlew'} test` : 'gradle test';
   if (has('go.mod')) return 'go test ./...';
   if (has('Cargo.toml')) return 'cargo test -q';
+  // Root had no marker — check one level of subdirs (monorepo / backend+frontend layouts)
+  // and run that subproject's suite from its own directory.
+  for (const d of readdirSync(dir)) {
+    const sub = join(dir, d);
+    if (d.startsWith('.') || d === 'node_modules' || !statSync(sub).isDirectory()) continue;
+    const cmd = subTestCmd(sub);
+    if (cmd) return cmd;
+  }
   return null; // ponytail: unknown stacks pass with a warning event; add detectors when hit
+}
+
+// Same markers as the root check, minus recursion — one level down is enough for the
+// repos we target; deeper nesting can be added when actually hit.
+function subTestCmd(sub) {
+  const has = (f) => existsSync(join(sub, f));
+  let cmd = null;
+  if (has('package.json')) {
+    const pkg = JSON.parse(readFileSync(join(sub, 'package.json'), 'utf8'));
+    if (pkg.scripts?.test) cmd = has('pnpm-lock.yaml') ? 'pnpm test' : 'npm test --silent';
+  } else if (has('pytest.ini') || has('pyproject.toml')) cmd = 'pytest -q';
+  else if (has('pom.xml')) cmd = 'mvn -q test';
+  else if (has('build.gradle') || has('build.gradle.kts'))
+    cmd = has('gradlew') ? (process.platform === 'win32' ? 'gradlew.bat test' : './gradlew test') : 'gradle test';
+  else if (has('go.mod')) cmd = 'go test ./...';
+  else if (has('Cargo.toml')) cmd = 'cargo test -q';
+  return cmd ? `cd ${JSON.stringify(sub)} && ${cmd}` : null;
 }
 
 const git = (wt, cmd) => execSync(`git ${cmd}`, { cwd: wt, encoding: 'utf8' });
