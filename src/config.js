@@ -8,3 +8,7 @@ export function repoConfig(repoPath) {
   try { return JSON.parse(readFileSync(join(repoPath, '.autodev.json'), 'utf8')); }
   catch { return {}; }
 }
+
+// Model for one stage session: per-stage map > repo-wide model > env pin > CLI default.
+export const modelFor = (cfg, stageKey) =>
+  cfg.stageModels?.[stageKey] || cfg.model || process.env.AUTODEV_CLAUDE_MODEL || null;

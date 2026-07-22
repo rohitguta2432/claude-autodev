@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { openDb, getRun, updateRun, runDir, PORT, skippedSet } from './db.js';
 import { emit } from './events.js';
 import { STAGES, detectTestCmd } from './stages.js';
-import { repoConfig } from './config.js';
+import { repoConfig, modelFor } from './config.js';
 import { parseClaudeResult } from './metrics.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -28,9 +28,21 @@ const hooksFile = join(ctx.runDir, 'hooks.json');
 writeFileSync(hooksFile, JSON.stringify({ hooks: { PostToolUse: [{ matcher: 'Edit|Write|MultiEdit',
   hooks: [{ type: 'command', command: `node ${join(ROOT, 'bin/hook-emit.js')}` }] }] } }));
 
+const cfg = repoConfig(run.worktree);
+// Running cost for THIS run — seeded from prior metrics events so resume keeps counting.
+let costUsd = 0;
+try {
+  for (const l of readFileSync(join(ctx.runDir, 'events.jsonl'), 'utf8').split('\n')) {
+    try { const e = JSON.parse(l); if (e.type === 'metrics') costUsd += e.cost_usd ?? 0; } catch {}
+  }
+} catch {}
+
 function runClaude(prompt, stageN) {
+  if (cfg.maxCostUsd && costUsd >= cfg.maxCostUsd)
+    throw Object.assign(new Error(
+      `cost budget exceeded: $${costUsd.toFixed(2)} spent >= maxCostUsd $${cfg.maxCostUsd} (.autodev.json) — raise it and resume`), { final: true });
   const bin = process.env.AUTODEV_CLAUDE_BIN || 'claude';
-  const model = process.env.AUTODEV_CLAUDE_MODEL; // pin a (cheaper) model for every stage session
+  const model = modelFor(cfg, STAGES[stageN - 1]?.key); // per-stage > repo model > env pin
   const args = process.env.AUTODEV_CLAUDE_BIN
     ? ['-p', prompt] // stub in tests
     : ['-p', prompt, '--dangerously-skip-permissions', '--settings', hooksFile, '--output-format', 'json',
@@ -45,7 +57,7 @@ function runClaude(prompt, stageN) {
   // Per-session telemetry (tokens / model / cost) from the CLI's result JSON — one
   // metrics event per claude call, so review/fix loops surface their true spend.
   const { text, metrics } = parseClaudeResult(raw);
-  if (metrics) ev({ type: 'metrics', stage: stageN, ...metrics });
+  if (metrics) { costUsd += metrics.cost_usd ?? 0; ev({ type: 'metrics', stage: stageN, ...metrics }); }
   return text;
 }
 

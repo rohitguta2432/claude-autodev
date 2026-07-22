@@ -56,6 +56,23 @@ e.g. `claude-sonnet-5`), `AUTODEV_HOME` (state dir, default `~/.autodev`),
 `AUTODEV_WORKTREES` (worktree root, default `~/worktrees`), `AUTODEV_JIRA_BASE`
 + `AUTODEV_JIRA_CLOUD_ID` (Jira links / site pinning for Jira-mode runs).
 
+## Cost
+
+Every stage is a full headless `claude -p` session; with retries and the
+review ⇄ fix loop a single run is realistically **10–25 sessions**, none sharing
+context. Headless sessions use the same credentials as interactive Claude Code:
+subscription login draws on your subscription limits, while an
+`ANTHROPIC_API_KEY` in the environment bills **per token** instead
+(`autodev doctor` warns when one is set). To see and cap spend:
+
+- `autodev cost <id>` — per-stage sessions/tokens/cost summed from the run's
+  metrics events (also visible per stage on the dashboard).
+- Pin cheaper models: `AUTODEV_CLAUDE_MODEL` for everything, or per stage in
+  `.autodev.json` — `{"stageModels": {"implement": "claude-sonnet-5"}, "model": "claude-sonnet-5"}`
+  (per-stage > repo-wide > env).
+- Hard ceiling: `{"maxCostUsd": 10}` in `.autodev.json` parks the run before
+  any session that would start beyond the budget; raise it and `autodev resume`.
+
 ## Smart spec detection
 
 If `specs/NNN-*` directories already exist in the target repo, `autodev run`

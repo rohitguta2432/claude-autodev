@@ -91,3 +91,25 @@ test('.autodev.json testCmd overrides detection and unblocks the same repo', () 
   const db2 = openDb();
   assert.equal(getRun(db2, id).status, 'DONE'); db2.close();
 });
+
+test('runner parks before starting a session beyond maxCostUsd; cost CLI sums metrics', () => {
+  const db = openDb();
+  const wt = makeRepoWithWorktree();
+  writeFileSync(join(wt, '.autodev.json'), JSON.stringify({ maxCostUsd: 1 }));
+  git(wt, ['add', '-A'], commit('cfg'));
+  // stub emits a claude result JSON costing $2 and produces no artifacts —
+  // session 1 records the cost, session 2 must be refused by the budget gate.
+  const costStub = mkdtempSync(join(tmpdir(), 'cost-stub-'));
+  const stub = stubClaude(costStub,
+    `process.stdout.write(JSON.stringify({ type: 'result', result: 'ok', total_cost_usd: 2, usage: { input_tokens: 10, output_tokens: 5 } }));`);
+  const id = createRun(db, { slug: 'c', repo: 'demo', repo_path: wt, worktree: wt, branch: 'autodev/001-x', requirement: 'demo' });
+  db.close();
+  execFileSync('node', ['src/runner.js', String(id)], { env: { ...process.env, AUTODEV_CLAUDE_BIN: stub } });
+  const db2 = openDb();
+  const run = getRun(db2, id); db2.close();
+  assert.equal(run.status, 'BLOCKED');
+  assert.match(run.blocked_reason, /cost budget exceeded/);
+  const out = execFileSync('node', ['bin/autodev.js', 'cost', String(id)], { encoding: 'utf8' });
+  assert.match(out, /stage 1 Spec/);
+  assert.match(out, /\$2\.00/);
+});

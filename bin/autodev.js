@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, openSync, copyFileSync } from 'node:fs';
+import { mkdirSync, openSync, copyFileSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname, basename, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -140,6 +140,25 @@ if (cmd === 'run') {
   db.close();
   await emit({ runDir: runDir(id), port: PORT() }, { run: id, type: 'parked', stage: run.stage, detail: 'stopped by user' });
   console.log(`run #${id} stopped`);
+} else if (cmd === 'cost') {
+  const id = Number(rest[0]);
+  const p = join(runDir(id), 'events.jsonl');
+  if (!id || !existsSync(p)) { console.error(`no events for run ${rest[0] ?? '?'}`); process.exit(1); }
+  const per = new Map(); // stage → {calls, in, out, cost}
+  for (const l of readFileSync(p, 'utf8').split('\n').filter(Boolean)) {
+    let e; try { e = JSON.parse(l); } catch { continue; }
+    if (e.type !== 'metrics') continue;
+    const s = per.get(e.stage) ?? { calls: 0, tin: 0, tout: 0, cost: 0, models: new Set() };
+    s.calls++; s.tin += e.tokens_in ?? 0; s.tout += e.tokens_out ?? 0; s.cost += e.cost_usd ?? 0;
+    if (e.model) s.models.add(e.model);
+    per.set(e.stage, s);
+  }
+  let tot = { calls: 0, tin: 0, tout: 0, cost: 0 };
+  for (const [n, s] of [...per.entries()].sort((a, b) => a[0] - b[0])) {
+    console.log(`stage ${n} ${(STAGES[n - 1]?.title ?? '?').padEnd(10)} ${String(s.calls).padStart(2)} session(s)  in ${String(s.tin).padStart(9)}  out ${String(s.tout).padStart(8)}  $${s.cost.toFixed(2)}  ${[...s.models].join(' + ')}`);
+    tot.calls += s.calls; tot.tin += s.tin; tot.tout += s.tout; tot.cost += s.cost;
+  }
+  console.log(`total            ${String(tot.calls).padStart(2)} session(s)  in ${String(tot.tin).padStart(9)}  out ${String(tot.tout).padStart(8)}  $${tot.cost.toFixed(2)}`);
 } else if (cmd === 'doctor') {
   const repoArg = rest[0] === '--repo' ? rest[1] : rest[0];
   const failures = printChecks(await doctor(repoArg ? resolve(repoArg) : process.cwd()));
@@ -154,5 +173,5 @@ if (cmd === 'run') {
     console.log(`installed skill: ${dest}`);
   }
 } else {
-  console.log('usage: autodev run "<requirement>" [--repo <path>] [--spec <path>] [--branch <name>] [--test-cmd <cmd>] | status | resume <id> | stop <id> | doctor [path] | install-skill');
+  console.log('usage: autodev run "<requirement>" [--repo <path>] [--spec <path>] [--branch <name>] [--test-cmd <cmd>] | status | resume <id> | stop <id> | cost <id> | doctor [path] | install-skill');
 }
