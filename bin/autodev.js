@@ -199,6 +199,9 @@ if (cmd === 'run') {
     tot.calls += s.calls; tot.tin += s.tin; tot.tout += s.tout; tot.cost += s.cost;
   }
   console.log(`total            ${String(tot.calls).padStart(2)} session(s)  in ${String(tot.tin).padStart(9)}  out ${String(tot.tout).padStart(8)}  $${tot.cost.toFixed(2)}`);
+} else if (cmd === 'selftest') {
+  const { selftest } = await import('../src/selftest.js');
+  process.exit((await selftest()) ? 0 : 1);
 } else if (cmd === 'doctor') {
   const repoArg = rest[0] === '--repo' ? rest[1] : rest[0];
   const failures = printChecks(await doctor(repoArg ? resolve(repoArg) : process.cwd()));
@@ -230,5 +233,5 @@ if (cmd === 'run') {
     console.log(`installed skill: ${dest}`);
   }
 } else {
-  console.log('usage: autodev run "<requirement>" [--repo <path>] [--spec <path>] [--branch <name>] [--test-cmd <cmd>] [--until <stage>] [--no-push] | status | resume <id> | stop <id> | cost <id> | doctor [path] | install-skill [--project] [--force] | uninstall-skill [--project]');
+  console.log('usage: autodev run "<requirement>" [--repo <path>] [--spec <path>] [--branch <name>] [--test-cmd <cmd>] [--until <stage>] [--no-push] | status | resume <id> | stop <id> | cost <id> | doctor [path] | selftest | install-skill [--project] [--force] | uninstall-skill [--project]');
 }
