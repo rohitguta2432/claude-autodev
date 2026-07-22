@@ -1,6 +1,6 @@
 {
   "name": "claude-autodev",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Requirement in, reviewed and tested PR out. An autonomous 7-stage dev pipeline for Claude Code with a live mission-control dashboard.",
   "keywords": ["claude-code", "ai", "pipeline", "autonomous", "agents", "sdlc", "dashboard"],
