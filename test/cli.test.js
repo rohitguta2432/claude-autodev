@@ -156,3 +156,11 @@ test('autodev run --no-push and --until store the stage cap; bad --until exits',
   assert.equal(listRuns(db2)[0].until_stage, 2); db2.close();
   assert.throws(() => execFileSync('node', ['bin/autodev.js', 'run', 'x', '--repo', repo, '--no-spawn', '--until', 'nonsense'], { stdio: 'pipe' }), /--until wants/s);
 });
+
+test('run without recorded consent (real claude, no TTY) aborts and explains', () => {
+  const env = { ...process.env, AUTODEV_HOME: mkdtempSync(join(tmpdir(), 'consent-')) };
+  delete env.AUTODEV_CLAUDE_BIN; // real-claude mode → consent gate applies
+  assert.throws(
+    () => execFileSync('node', ['bin/autodev.js', 'run', 'x y z', '--no-spawn'], { env, stdio: 'pipe' }),
+    /dangerously-skip-permissions[\s\S]*consent/);
+});

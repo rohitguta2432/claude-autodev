@@ -94,10 +94,13 @@ starts fresh at stage 1. To force a specific spec, pass `--spec <path>`.
 
 ## Safety notes
 
-- Headless Claude sessions run with `--dangerously-skip-permissions`. This is
-  scoped by running **inside an isolated git worktree** created just for the
-  run — not your main working copy — but you should still only point autodev
-  at repos and requirements you'd trust an unsupervised agent with.
+- Headless Claude sessions run with `--dangerously-skip-permissions`. The first
+  `autodev run` explains this and asks for one-time consent (recorded in
+  `~/.autodev/consent`). The worktree scopes *file edits* away from your main
+  working copy, but be clear about what it does **not** isolate: the worktree
+  shares `.git` with your main checkout, and sessions inherit your full
+  environment — credentials included. Only point autodev at repos and
+  requirements you'd trust an unsupervised agent with.
 - The dashboard server binds to `127.0.0.1` only; it's never exposed on the
   network.
 - Each stage has a retry cap (default 2 outer retries, 3 review⇄fix rounds)

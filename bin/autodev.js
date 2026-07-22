@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, openSync, copyFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, openSync, copyFileSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { createInterface } from 'node:readline/promises';
 import { join, dirname, basename, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
-import { PORT, runDir, openDb, createRun, getRun, listRuns, updateRun } from '../src/db.js';
+import { PORT, runDir, openDb, createRun, getRun, listRuns, updateRun, AUTODEV_HOME } from '../src/db.js';
 import { emit } from '../src/events.js';
 import { specDirFor, isCompleteSpecDir, STAGES, stageN } from '../src/stages.js';
 import { parseJiraRef, fetchIssue } from '../src/jira.js';
@@ -27,6 +28,32 @@ async function ensureServer() {
 }
 
 const slugify = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+
+// One-time informed consent for --dangerously-skip-permissions — a stranger on a
+// new machine must make this decision explicitly, not inherit it silently.
+// Stubbed sessions (AUTODEV_CLAUDE_BIN) never reach real claude, so tests are exempt.
+async function ensureConsent() {
+  if (process.env.AUTODEV_CLAUDE_BIN) return;
+  const consentPath = join(AUTODEV_HOME(), 'consent');
+  if (existsSync(consentPath)) return;
+  const msg = `autodev runs every stage as a headless claude session with
+--dangerously-skip-permissions: the agent edits files, runs commands, commits,
+pushes, and opens PRs WITHOUT asking per action. Isolation is a git worktree —
+weaker than a sandbox: it shares .git with your main checkout and the sessions
+inherit your full environment (credentials included). Only point autodev at
+repos and requirements you'd trust an unsupervised agent with.`;
+  if (!process.stdin.isTTY) {
+    console.error(`${msg}\n\nno TTY to confirm on — run autodev once interactively to record consent (${consentPath})`);
+    process.exit(1);
+  }
+  console.log(msg);
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const a = (await rl.question('\nProceed and remember this choice? [y/N] ')).trim();
+  rl.close();
+  if (!/^y(es)?$/i.test(a)) { console.error('aborted — consent not given'); process.exit(1); }
+  mkdirSync(AUTODEV_HOME(), { recursive: true });
+  writeFileSync(consentPath, `--dangerously-skip-permissions consented at ${new Date().toISOString()}\n`);
+}
 
 function spawnRunner(id, extra = []) {
   const log = openSync(join(runDir(id), 'runner.log'), 'a');
@@ -65,6 +92,7 @@ if (cmd === 'run') {
   let { requirement, repoPath, noSpawn, specArg, branchArg, testCmd, until } = parseRunArgs(rest);
   if (!requirement) { console.error('usage: autodev run "<requirement>"|<JIRA-KEY> [--repo <path>] [--spec <path>] [--branch <name>] [--test-cmd <cmd>] [--until <stage>] [--no-push]'); process.exit(1); }
 
+  await ensureConsent();
   // Preflight — a stranger's first failure should cost five seconds, not a parked run.
   const failures = printChecks((await doctor(repoPath)).filter(c => c.severity !== 'pass'));
   if (failures.length) { console.error(`\n${failures.length} preflight check(s) failed — fix and re-run (autodev doctor to re-check)`); process.exit(1); }
