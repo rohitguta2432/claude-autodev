@@ -85,8 +85,9 @@ test('POST /api/runs/:id/jump validates, sets stage, and relaunches the runner',
   assert.equal((await fetch(`${base}/api/runs/999/jump`, { method: 'POST',
     headers: { 'content-type': 'application/json' }, body: '{"stage":3}' })).status, 404);
 
-  // worktree with no test config → stage 7 detects no test cmd and completes the run
+  // worktree with a trivially-green test command → stage 7 runs it and completes the run
   const worktree = mkdtempSync(join(tmpdir(), 'wt-jump-'));
+  writeFileSync(join(worktree, '.autodev.json'), JSON.stringify({ testCmd: 'node -e ""' }));
   const { id } = await j(await fetch(`${base}/runs`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ slug: 'jump', repo: 'demo', repo_path: '/p', worktree, branch: 'b', requirement: 'q' }),
@@ -99,7 +100,7 @@ test('POST /api/runs/:id/jump validates, sets stage, and relaunches the runner',
     headers: { 'content-type': 'application/json' }, body: '{"stage":7}' });
   assert.equal(res.status, 200);
   let run;
-  for (let i = 0; i < 50; i++) { // spawned runner skips tests (none detected) and finishes
+  for (let i = 0; i < 50; i++) { // spawned runner executes the configured test cmd and finishes
     run = await j(await fetch(`${base}/api/runs/${id}`));
     if (run.status === 'DONE') break;
     await new Promise(r => setTimeout(r, 100));

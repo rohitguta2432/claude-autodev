@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { openDb, getRun, updateRun, runDir, PORT, skippedSet } from './db.js';
 import { emit } from './events.js';
 import { STAGES, detectTestCmd } from './stages.js';
+import { repoConfig } from './config.js';
 import { parseClaudeResult } from './metrics.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -75,8 +76,14 @@ async function reviewStage(stage) { // inner review⇄fix loop
 }
 
 async function testStage(stage) {
-  const cmd = detectTestCmd(run.worktree);
-  if (!cmd) { await ev({ type: 'activity', stage: stage.n, detail: 'no test command detected — skipping' }); run._testsPassed = true; return; }
+  // precedence: --test-cmd (run row) > repo .autodev.json > detection — never a silent pass.
+  const cmd = run.test_cmd || repoConfig(run.worktree).testCmd || detectTestCmd(run.worktree);
+  if (!cmd) {
+    run._testsPassed = false;
+    throw Object.assign(new Error(
+      'no test command detected — pass --test-cmd "<cmd>" or set "testCmd" in .autodev.json; "tested PR out" must never be vacuous'), { final: true });
+  }
+  await ev({ type: 'activity', stage: stage.n, detail: `test command: ${cmd}` });
   mkdirSync(join(run.worktree, '.autodev'), { recursive: true });
   for (let attempt = 0; ; attempt++) {
     try {

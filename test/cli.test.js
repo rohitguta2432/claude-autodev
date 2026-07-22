@@ -135,3 +135,12 @@ test('stop kills the runner\'s whole process group, including the claude child',
   assert.ok(!isAlive(runnerPid), 'runner should be dead after stop');
   assert.ok(!isAlive(claudePid), 'claude stub should be dead after stop (not orphaned)');
 });
+
+test('autodev run --test-cmd stores the override on the run row', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'repo-'));
+  git(repo, ['init', '-q', '-b', 'main'], commit('init', '--allow-empty'));
+  execFileSync('node', ['bin/autodev.js', 'run', 'health endpoint two', '--repo', repo, '--no-spawn', '--test-cmd', 'make check'], { encoding: 'utf8' });
+  const db = openDb();
+  const run = listRuns(db)[0]; db.close();
+  assert.equal(run.test_cmd, 'make check');
+});

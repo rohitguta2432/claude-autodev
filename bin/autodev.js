@@ -41,20 +41,22 @@ function parseRunArgs(args) {
   let noSpawn = false;
   let specArg = null;
   let branchArg = null;
+  let testCmd = null;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--repo') { repoPath = args[++i]; }
     else if (a === '--spec') { specArg = args[++i]; }
     else if (a === '--branch') { branchArg = args[++i]; }
+    else if (a === '--test-cmd') { testCmd = args[++i]; }
     else if (a === '--no-spawn') { noSpawn = true; }
     else words.push(a);
   }
-  return { requirement: words.join(' '), repoPath: resolve(repoPath), noSpawn, specArg, branchArg };
+  return { requirement: words.join(' '), repoPath: resolve(repoPath), noSpawn, specArg, branchArg, testCmd };
 }
 
 if (cmd === 'run') {
-  let { requirement, repoPath, noSpawn, specArg, branchArg } = parseRunArgs(rest);
-  if (!requirement) { console.error('usage: autodev run "<requirement>"|<JIRA-KEY> [--repo <path>] [--spec <path>] [--branch <name>]'); process.exit(1); }
+  let { requirement, repoPath, noSpawn, specArg, branchArg, testCmd } = parseRunArgs(rest);
+  if (!requirement) { console.error('usage: autodev run "<requirement>"|<JIRA-KEY> [--repo <path>] [--spec <path>] [--branch <name>] [--test-cmd <cmd>]'); process.exit(1); }
 
   // Jira mode: "autodev run CV-123" (or a browse URL) — resolve the ticket into the
   // requirement before anything else, so spec matching and slug use the real summary.
@@ -102,7 +104,7 @@ if (cmd === 'run') {
     : ['worktree', 'add', '-b', branch, worktree];
   execFileSync('git', wtAddArgs, { cwd: repoPath });
   const id = createRun(db, { slug, repo, repo_path: repoPath, worktree, branch, requirement,
-    jira_key: jiraKey, issue_type: issueType, stage: adoptedSpec ? 2 : 1 });
+    jira_key: jiraKey, issue_type: issueType, test_cmd: testCmd, stage: adoptedSpec ? 2 : 1 });
   db.close();
   mkdirSync(runDir(id), { recursive: true });
   if (!noSpawn) spawnRunner(id);
@@ -142,5 +144,5 @@ if (cmd === 'run') {
     console.log(`installed skill: ${dest}`);
   }
 } else {
-  console.log('usage: autodev run "<requirement>" [--repo <path>] [--spec <path>] [--branch <name>] | status | resume <id> | stop <id> | install-skill');
+  console.log('usage: autodev run "<requirement>" [--repo <path>] [--spec <path>] [--branch <name>] [--test-cmd <cmd>] | status | resume <id> | stop <id> | install-skill');
 }

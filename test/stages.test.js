@@ -77,6 +77,26 @@ test('detectTestCmd finds gradle at root and markers one level down', () => {
   assert.equal(detectTestCmd(n), null);
 });
 
+test('detectTestCmd finds tox / requirements+tests / Makefile test target / csproj', () => {
+  const t = mkdtempSync(join(tmpdir(), 'p-'));
+  writeFileSync(join(t, 'tox.ini'), '[tox]');
+  assert.equal(detectTestCmd(t), 'tox -q');
+  const r = mkdtempSync(join(tmpdir(), 'p-'));
+  writeFileSync(join(r, 'requirements.txt'), 'pytest');
+  assert.equal(detectTestCmd(r), null); // requirements alone is not enough
+  mkdirSync(join(r, 'tests'));
+  assert.equal(detectTestCmd(r), 'python -m pytest -q');
+  const m = mkdtempSync(join(tmpdir(), 'p-'));
+  writeFileSync(join(m, 'Makefile'), 'build:\n\techo hi\ntest:\n\techo t\n');
+  assert.equal(detectTestCmd(m), 'make test');
+  const m2 = mkdtempSync(join(tmpdir(), 'p-'));
+  writeFileSync(join(m2, 'Makefile'), 'build:\n\techo hi\n'); // no test target
+  assert.equal(detectTestCmd(m2), null);
+  const c = mkdtempSync(join(tmpdir(), 'p-'));
+  writeFileSync(join(c, 'App.csproj'), '<Project/>');
+  assert.equal(detectTestCmd(c), 'dotnet test');
+});
+
 function completeSpec(wt, dirName) {
   const d = join(wt, 'specs', dirName);
   mkdirSync(d, { recursive: true });

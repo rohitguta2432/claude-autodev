@@ -36,44 +36,39 @@ export function specDirFor(repoPath, requirement) {
   return matches.length === 1 ? join(root, matches[0]) : null;
 }
 
-export function detectTestCmd(dir) {
+// Test-command markers for one directory — shared by the root check and the subdir scan.
+function markerCmd(dir) {
   const has = (f) => existsSync(join(dir, f));
   if (has('package.json')) {
     const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
     if (pkg.scripts?.test) return has('pnpm-lock.yaml') ? 'pnpm test' : 'npm test --silent';
   }
   if (has('pytest.ini') || has('pyproject.toml')) return 'pytest -q';
+  if (has('tox.ini')) return 'tox -q';
+  if (has('requirements.txt') && has('tests')) return 'python -m pytest -q';
   if (has('pom.xml')) return 'mvn -q test';
   if (has('build.gradle') || has('build.gradle.kts'))
     return has('gradlew') ? `${process.platform === 'win32' ? 'gradlew.bat' : './gradlew'} test` : 'gradle test';
   if (has('go.mod')) return 'go test ./...';
   if (has('Cargo.toml')) return 'cargo test -q';
+  if (has('Makefile') && /^test:/m.test(readFileSync(join(dir, 'Makefile'), 'utf8'))) return 'make test';
+  if (readdirSync(dir).some(f => f.endsWith('.csproj') || f.endsWith('.sln'))) return 'dotnet test';
+  return null;
+}
+
+export function detectTestCmd(dir) {
+  const cmd = markerCmd(dir);
+  if (cmd) return cmd;
   // Root had no marker — check one level of subdirs (monorepo / backend+frontend layouts)
   // and run that subproject's suite from its own directory.
+  // ponytail: one level only; deeper nesting can be added when actually hit.
   for (const d of readdirSync(dir)) {
     const sub = join(dir, d);
     if (d.startsWith('.') || d === 'node_modules' || !statSync(sub).isDirectory()) continue;
-    const cmd = subTestCmd(sub);
-    if (cmd) return cmd;
+    const c = markerCmd(sub);
+    if (c) return `cd ${JSON.stringify(sub)} && ${c}`;
   }
-  return null; // ponytail: unknown stacks pass with a warning event; add detectors when hit
-}
-
-// Same markers as the root check, minus recursion — one level down is enough for the
-// repos we target; deeper nesting can be added when actually hit.
-function subTestCmd(sub) {
-  const has = (f) => existsSync(join(sub, f));
-  let cmd = null;
-  if (has('package.json')) {
-    const pkg = JSON.parse(readFileSync(join(sub, 'package.json'), 'utf8'));
-    if (pkg.scripts?.test) cmd = has('pnpm-lock.yaml') ? 'pnpm test' : 'npm test --silent';
-  } else if (has('pytest.ini') || has('pyproject.toml')) cmd = 'pytest -q';
-  else if (has('pom.xml')) cmd = 'mvn -q test';
-  else if (has('build.gradle') || has('build.gradle.kts'))
-    cmd = has('gradlew') ? (process.platform === 'win32' ? 'gradlew.bat test' : './gradlew test') : 'gradle test';
-  else if (has('go.mod')) cmd = 'go test ./...';
-  else if (has('Cargo.toml')) cmd = 'cargo test -q';
-  return cmd ? `cd ${JSON.stringify(sub)} && ${cmd}` : null;
+  return null; // caller decides: runner PARKS on null rather than passing a suite it never ran
 }
 
 const git = (wt, cmd) => execSync(`git ${cmd}`, { cwd: wt, encoding: 'utf8' });

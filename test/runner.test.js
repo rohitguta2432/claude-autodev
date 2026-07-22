@@ -14,14 +14,16 @@ const stubDir = mkdtempSync(join(tmpdir(), 'stub-'));
 const stubPath = stubClaude(stubDir, pipelineStubJs(join(stubDir, 'calls')));
 process.env.AUTODEV_CLAUDE_BIN = stubPath;
 
-function makeRepoWithWorktree() {
+function makeRepoWithWorktree({ testMarker = true } = {}) {
   const origin = mkdtempSync(join(tmpdir(), 'origin-'));
   git(origin, ['init', '-q', '--bare']);
   const wt = mkdtempSync(join(tmpdir(), 'wt-'));
   git(wt, ['init', '-q'], commit('init', '--allow-empty'),
     ['remote', 'add', 'origin', origin], ['checkout', '-qb', 'autodev/001-x']);
-  writeFileSync(join(wt, 'package.json'), JSON.stringify({ scripts: { test: 'node -e ""' } }));
-  git(wt, ['add', '-A'], commit('pkg'));
+  if (testMarker) {
+    writeFileSync(join(wt, 'package.json'), JSON.stringify({ scripts: { test: 'node -e ""' } }));
+    git(wt, ['add', '-A'], commit('pkg'));
+  }
   return wt;
 }
 
@@ -63,4 +65,29 @@ test('runner parks a run when a stage keeps failing, resume re-enters at that st
   execFileSync('node', ['src/runner.js', String(id), '--resume'], { env: process.env });
   const db3 = openDb();
   assert.equal(getRun(db3, id).status, 'DONE'); db3.close();
+});
+
+test('runner PARKS when no test command is detectable — never a vacuous pass', () => {
+  const db = openDb();
+  const wt = makeRepoWithWorktree({ testMarker: false });
+  const id = createRun(db, { slug: 'z', repo: 'demo', repo_path: wt, worktree: wt, branch: 'autodev/001-x', requirement: 'demo' });
+  db.close();
+  execFileSync('node', ['src/runner.js', String(id)], { env: process.env });
+  const db2 = openDb();
+  const run = getRun(db2, id); db2.close();
+  assert.equal(run.status, 'BLOCKED');
+  assert.equal(run.stage, 7);
+  assert.match(run.blocked_reason, /no test command/);
+});
+
+test('.autodev.json testCmd overrides detection and unblocks the same repo', () => {
+  const db = openDb();
+  const wt = makeRepoWithWorktree({ testMarker: false });
+  writeFileSync(join(wt, '.autodev.json'), JSON.stringify({ testCmd: 'node -e ""' }));
+  git(wt, ['add', '-A'], commit('cfg'));
+  const id = createRun(db, { slug: 'w', repo: 'demo', repo_path: wt, worktree: wt, branch: 'autodev/001-x', requirement: 'demo' });
+  db.close();
+  execFileSync('node', ['src/runner.js', String(id)], { env: process.env });
+  const db2 = openDb();
+  assert.equal(getRun(db2, id).status, 'DONE'); db2.close();
 });
