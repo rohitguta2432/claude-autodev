@@ -51,10 +51,33 @@ autodev stop <id>
 
 Dashboard: http://127.0.0.1:4590/ — live stage/status per run, updated over SSE.
 
-Optional env vars: `AUTODEV_CLAUDE_MODEL` (pin a model for every stage session,
-e.g. `claude-sonnet-5`), `AUTODEV_HOME` (state dir, default `~/.autodev`),
-`AUTODEV_WORKTREES` (worktree root, default `~/worktrees`), `AUTODEV_JIRA_BASE`
-+ `AUTODEV_JIRA_CLOUD_ID` (Jira links / site pinning for Jira-mode runs).
+## Configuration
+
+Precedence everywhere: **CLI flag > `.autodev.json` > env var > default**.
+
+Per-repo `.autodev.json` (committed to the *target* repo):
+
+| key | example | effect |
+|-----|---------|--------|
+| `testCmd` | `"cd backend && pytest -q"` | Test-stage command when detection isn't enough |
+| `model` | `"claude-sonnet-5"` | model for every stage session |
+| `stageModels` | `{"review": "claude-opus-4-8"}` | per-stage override (keys: spec, analyze, implement, verify, push, review, test) |
+| `maxCostUsd` | `10` | park the run before any session beyond this budget |
+| `until` | `"analyze"` | always stop after this stage |
+| `push` | `false` | never push/PR — caps runs at Verify |
+| `branchPrefix` | `"feature"` | branch naming: `<prefix>/NNN-slug` |
+
+Env vars:
+
+| var | default | effect |
+|-----|---------|--------|
+| `AUTODEV_CLAUDE_MODEL` | – | pin a model for every stage session |
+| `AUTODEV_HOME` | `~/.autodev` | state dir (db, run logs, consent) |
+| `AUTODEV_WORKTREES` | `~/worktrees` | where run worktrees are created |
+| `AUTODEV_PORT` | `4590` | dashboard port |
+| `AUTODEV_JIRA_BASE` | – | Jira base URL for dashboard ticket links |
+| `AUTODEV_JIRA_CLOUD_ID` | – | pin the Atlassian cloudId for Jira-mode fetches |
+| `AUTODEV_CLAUDE_BIN` | `claude` | claude binary override (a `.js` path runs via node — test stubs) |
 
 ## Cost
 

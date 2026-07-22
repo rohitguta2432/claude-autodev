@@ -164,3 +164,12 @@ test('run without recorded consent (real claude, no TTY) aborts and explains', (
     () => execFileSync('node', ['bin/autodev.js', 'run', 'x y z', '--no-spawn'], { env, stdio: 'pipe' }),
     /dangerously-skip-permissions[\s\S]*consent/);
 });
+
+test('.autodev.json branchPrefix names the run branch', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'repo-'));
+  git(repo, ['init', '-q', '-b', 'main'], commit('init', '--allow-empty'));
+  writeFileSync(join(repo, '.autodev.json'), JSON.stringify({ branchPrefix: 'feature' }));
+  git(repo, ['add', '-A'], commit('cfg'));
+  const out = execFileSync('node', ['bin/autodev.js', 'run', 'prefix demo run', '--repo', repo, '--no-spawn'], { encoding: 'utf8' });
+  assert.match(out, /feature\/\d{3}-prefix-demo-run/);
+});

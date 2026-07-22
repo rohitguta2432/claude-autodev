@@ -10,6 +10,7 @@ import { emit } from '../src/events.js';
 import { specDirFor, isCompleteSpecDir, STAGES, stageN } from '../src/stages.js';
 import { parseJiraRef, fetchIssue } from '../src/jira.js';
 import { doctor, printChecks } from '../src/doctor.js';
+import { repoConfig } from '../src/config.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const base = () => `http://127.0.0.1:${PORT()}`;
@@ -132,7 +133,7 @@ if (cmd === 'run') {
   const runs = listRuns(db);
   const nnn = String((runs[0]?.id ?? 0) + 1).padStart(3, '0');
   const slug = slugify(slugSource);
-  const branch = branchArg || `autodev/${nnn}-${slug}`;
+  const branch = branchArg || `${repoConfig(repoPath).branchPrefix || 'autodev'}/${nnn}-${slug}`;
   const wtRoot = process.env.AUTODEV_WORKTREES || join(homedir(), 'worktrees');
   const worktree = join(wtRoot, repo, `run-${nnn}`);
   mkdirSync(dirname(worktree), { recursive: true });
