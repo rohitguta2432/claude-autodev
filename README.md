@@ -1,7 +1,12 @@
 # claude-autodev
 
+[![CI](https://github.com/rohitguta2432/claude-autodev/actions/workflows/ci.yml/badge.svg)](https://github.com/rohitguta2432/claude-autodev/actions/workflows/ci.yml)
+
 Requirement in → reviewed, tested PR out. An autonomous 7-stage dev pipeline
 for Claude Code with a live mission-control dashboard.
+
+Supported platforms: Linux, macOS, and Windows — the test suite runs on all
+three (Node 22 and 24) in CI on every push.
 
 ## Why
 
@@ -38,18 +43,53 @@ Requirements: Node ≥22.5, `git`, the [Claude Code CLI](https://claude.com/clau
 (`claude`), and optionally [`gh`](https://cli.github.com/) for opening PRs.
 
 ```bash
-npm install -g github:rohitguta2432/claude-autodev
-autodev install-skill   # copies the packaged skill into ~/.claude/skills/autodev/
+npm install -g github:rohitguta2432/claude-autodev#v0.2.0   # pin the tag — master moves
+autodev selftest        # ~30s: drives a fixture repo through all 7 stages, no quota spent
+autodev doctor          # preflight: node/git/claude/gh/repo/test-cmd, each with a fix
+autodev install-skill   # optional: packaged skills into ~/.claude/skills/ (--project for repo-local)
 ```
 
 ```bash
 autodev run "add rate limiting to the API" --repo .
 autodev status
+autodev cost <id>       # per-stage sessions / tokens / $
 autodev resume <id>     # after fixing whatever parked it BLOCKED
 autodev stop <id>
 ```
 
-Dashboard: http://127.0.0.1:4590/ — live stage/status per run, updated over SSE.
+The first real run explains `--dangerously-skip-permissions` and asks for
+one-time consent. Dashboard: http://127.0.0.1:4590/ — live stage/status per
+run, updated over SSE.
+
+### A first run, end to end
+
+```
+$ autodev run "add a /health endpoint returning build info" --repo ~/code/myapi
+[ PASS ] node >= 22.5 — found 22.12.0
+[ PASS ] git on PATH — git version 2.43.0
+[ PASS ] claude CLI on PATH — 2.1.205 (Claude Code)
+...
+run #1 started — autodev/001-add-a-health-endpoint-returning-build
+worktree: ~/worktrees/myapi/run-001
+dashboard: http://127.0.0.1:4590/
+$ autodev status
+#001 RUNNING  stage 3/7  myapi  add-a-health-endpoint-returning-build
+```
+
+The run advances Spec → Analyze → Implement → Verify → Push (draft PR) →
+Review → Test on its own; you get a PR marked ready once review and tests are
+green, or a `BLOCKED` status with a diagnosis in
+`~/.autodev/runs/1/blocked.md` if it truly gets stuck.
+
+## Troubleshooting
+
+| symptom | cause / fix |
+|---------|-------------|
+| `no test command detected — pass --test-cmd …` (run parks at stage 7) | detection covers npm/pytest/tox/maven/gradle/go/cargo/make/dotnet at the root and one subdir level; anything else needs `--test-cmd "<cmd>"` or `"testCmd"` in `.autodev.json` |
+| `branch has no upstream — push failed` (parks at stage 5) | the repo has no `origin` remote or no push rights; add one, or run with `--no-push` |
+| `review verdict: REQUEST_CHANGES` after 3 rounds | the review⇄fix loop spent its budget; read `.autodev/review.json` in the worktree, fix or relax, then `autodev resume <id>` |
+| `cost budget exceeded: $… >= maxCostUsd` | raise `maxCostUsd` in `.autodev.json` and `autodev resume <id>` |
+| `no TTY to confirm on — run autodev once interactively` | the skip-permissions consent hasn't been recorded; run any `autodev run` from a terminal once |
 
 ## Configuration
 
