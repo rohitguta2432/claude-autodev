@@ -1,12 +1,12 @@
 # claude-autodev
 
-Requirement in → reviewed, tested PR out. An autonomous 6-stage dev pipeline
+Requirement in → reviewed, tested PR out. An autonomous 7-stage dev pipeline
 for Claude Code with a live mission-control dashboard.
 
 ## Why
 
 Give it a one-line requirement and a git repo. It works the whole path —
-spec, plan, implementation, push, review, test — in an isolated git worktree,
+spec, plan, implementation, verify, push, review, test — in an isolated git worktree,
 retrying and self-fixing along the way, and parks itself with a diagnosis
 when it truly gets stuck. You watch (or don't) on a dashboard; you get a PR.
 
@@ -20,11 +20,12 @@ produces the artifact the next stage needs — no artifact, no advance.
 | 1 | Spec | `specs/NNN-slug/{spec,plan,tasks}.md` all non-empty |
 | 2 | Analyze | every `- [ ]` in `checklists/*.md` ticked |
 | 3 | Implement | every task in `tasks.md` ticked, worktree clean (committed) |
-| 4 | Push | branch has an upstream remote |
-| 5 | Review | `.autodev/review.json` verdict is `APPROVE` (loops fix ⇄ re-review) |
-| 6 | Test | the repo's own test command exits 0 (auto-detected, or fixed and retried) |
+| 4 | Verify | `.autodev/verify.json` verdict is `PASS` (no critical/high findings) |
+| 5 | Push | branch has an upstream remote (opens the PR with `gh pr create`) |
+| 6 | Review | `.autodev/review.json` verdict is `APPROVE` (loops fix ⇄ re-review) |
+| 7 | Test | the repo's own test command exits 0 (auto-detected, or fixed and retried) |
 
-A runner process drives one run through all six stages, retrying a failed
+A runner process drives one run through all seven stages, retrying a failed
 stage a bounded number of times before parking it `BLOCKED` with a diagnosis
 in `~/.autodev/runs/<id>/blocked.md`. A small SQLite registry plus a
 per-run `events.jsonl` is the source of truth; an HTTP+SSE server reads both
