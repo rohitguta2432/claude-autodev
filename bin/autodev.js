@@ -167,8 +167,13 @@ if (cmd === 'run') {
   // runner is spawned detached (its own process-group leader) and runs claude in that
   // same group via execFileSync — killing only the runner pid leaves claude running.
   if (run.pid) {
-    try { process.kill(-run.pid, 'SIGTERM'); }
-    catch { try { process.kill(run.pid); } catch {} }
+    if (process.platform === 'win32') {
+      // negative-PID group kill is POSIX-only; taskkill /T fells the whole process tree
+      try { execFileSync('taskkill', ['/pid', String(run.pid), '/T', '/F'], { stdio: 'ignore' }); } catch {}
+    } else {
+      try { process.kill(-run.pid, 'SIGTERM'); }
+      catch { try { process.kill(run.pid); } catch {} }
+    }
   }
   updateRun(db, id, { status: 'BLOCKED', blocked_reason: 'stopped by user' });
   db.close();
