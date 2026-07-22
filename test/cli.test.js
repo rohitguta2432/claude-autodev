@@ -82,7 +82,7 @@ test('autodev run --spec <path> pointing at incomplete dir fails cleanly: exit n
 
 test('install-skill: installs autodev + autodev-specs, warns on foreign overwrite, uninstalls', () => {
   const home = mkdtempSync(join(tmpdir(), 'home-'));
-  const env = { ...process.env, HOME: home };
+  const env = { ...process.env, HOME: home, USERPROFILE: home }; // homedir() reads USERPROFILE on win32
   execFileSync('node', ['bin/autodev.js', 'install-skill'], { encoding: 'utf8', env });
   const dest = join(home, '.claude/skills/autodev/SKILL.md');
   assert.equal(readFileSync(dest, 'utf8'), readFileSync('skill/SKILL.md', 'utf8'));

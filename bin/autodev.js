@@ -112,6 +112,8 @@ if (cmd === 'run') {
   }
 
   // Resolve spec adoption before touching git/db so an invalid --spec creates nothing.
+  // Stored/printed POSIX-style even on Windows — it's a repo-relative path, not an OS path.
+  const toPosix = (p) => p.replaceAll('\\', '/');
   let adoptedSpec = null; // repo-relative path, e.g. "specs/001-rate-limit"
   if (specArg) {
     const specAbs = resolve(repoPath, specArg);
@@ -119,10 +121,10 @@ if (cmd === 'run') {
       console.error(`--spec ${specArg} is not a complete spec dir (needs non-empty spec.md, plan.md, tasks.md)`);
       process.exit(1);
     }
-    adoptedSpec = relative(repoPath, specAbs);
+    adoptedSpec = toPosix(relative(repoPath, specAbs));
   } else {
     const found = specDirFor(repoPath, requirement);
-    if (found) adoptedSpec = relative(repoPath, found);
+    if (found) adoptedSpec = toPosix(relative(repoPath, found));
   }
 
   await ensureServer();
