@@ -18,7 +18,7 @@
   },
   "files": ["bin", "src", "public", "skill"],
   "scripts": {
-    "test": "node --test test/*.test.js",
+    "test": "node --test --test-timeout=120000",
     "server": "node src/server.js"
   }
 }

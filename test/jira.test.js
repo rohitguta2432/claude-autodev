@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, chmodSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
+import { stubClaude } from './helpers.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -16,15 +17,13 @@ test('parseJiraRef: keys and browse URLs, rejects free text', () => {
 });
 
 // Stub claude: echoes a canned Jira JSON (same AUTODEV_CLAUDE_BIN convention as runner tests).
-function stubClaude(body) {
+function echoStub(body) {
   const dir = mkdtempSync(join(tmpdir(), 'jira-stub-'));
-  writeFileSync(join(dir, 'claude'), `#!/usr/bin/env bash\necho '${body}'`);
-  chmodSync(join(dir, 'claude'), 0o755);
-  return join(dir, 'claude');
+  return stubClaude(dir, `process.stdout.write(${JSON.stringify(body)});\n`);
 }
 
 test('fetchIssue: parses issue JSON, classifies Bug, builds requirement', () => {
-  process.env.AUTODEV_CLAUDE_BIN = stubClaude(
+  process.env.AUTODEV_CLAUDE_BIN = echoStub(
     '{"key":"CV-77","type":"Bug","summary":"NPE on empty payload","description":"Steps: send empty body. AC: 400 returned."}');
   const issue = fetchIssue('CV-77');
   assert.equal(issue.type, 'bug');
@@ -35,9 +34,9 @@ test('fetchIssue: parses issue JSON, classifies Bug, builds requirement', () => 
 });
 
 test('fetchIssue: Story classifies as feature; error JSON throws with re-auth hint', () => {
-  process.env.AUTODEV_CLAUDE_BIN = stubClaude('{"key":"CV-8","type":"Story","summary":"Add cache"}');
+  process.env.AUTODEV_CLAUDE_BIN = echoStub('{"key":"CV-8","type":"Story","summary":"Add cache"}');
   assert.equal(fetchIssue('CV-8').type, 'feature');
-  process.env.AUTODEV_CLAUDE_BIN = stubClaude('{"error":"not authenticated"}');
+  process.env.AUTODEV_CLAUDE_BIN = echoStub('{"error":"not authenticated"}');
   assert.throws(() => fetchIssue('CV-9'), /authenticate/i);
   delete process.env.AUTODEV_CLAUDE_BIN;
 });

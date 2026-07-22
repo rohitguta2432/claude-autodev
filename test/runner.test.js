@@ -1,44 +1,27 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execSync, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
+import { git, commit, stubClaude, pipelineStubJs } from './helpers.js';
 
 process.env.AUTODEV_HOME = mkdtempSync(join(tmpdir(), 'autodev-run-'));
 const { openDb, createRun, getRun, runDir } = await import('../src/db.js');
 
 // Stub claude: reads the -p prompt, fabricates the right artifact per stage keyword.
 const stubDir = mkdtempSync(join(tmpdir(), 'stub-'));
-writeFileSync(join(stubDir, 'claude'), `#!/usr/bin/env bash
-prompt="$2"
-echo "\${prompt:0:60}" >> ${join(stubDir, 'calls')}
-case "$prompt" in
-  *specs-skill*) mkdir -p specs/001-x/checklists
-    printf '# spec\\ncontent...............................................\\n' > specs/001-x/spec.md
-    cp specs/001-x/spec.md specs/001-x/plan.md
-    printf -- '- [ ] T001 build\\n' > specs/001-x/tasks.md
-    printf -- '- [x] ok\\n' > specs/001-x/checklists/requirements.md
-    git add -A; git -c user.email=t@t -c user.name=t commit -qm spec ;;
-  *executing-plans*) perl -i -pe 's/- \\[ \\]/- [x]/' specs/001-x/tasks.md
-    git add -A; git -c user.email=t@t -c user.name=t commit -qm impl ;;
-  *ce-commit-push-pr*) git push -q -u origin HEAD ;;
-  *speckit.verify*) mkdir -p .autodev
-    echo '{"verdict":"PASS","findings":[]}' > .autodev/verify.json ;;
-  *code-review*) mkdir -p .autodev
-    echo '{"verdict":"APPROVE","findings":[]}' > .autodev/review.json ;;
-  *) exit 0 ;;
-esac`);
-chmodSync(join(stubDir, 'claude'), 0o755);
-process.env.AUTODEV_CLAUDE_BIN = join(stubDir, 'claude');
+const stubPath = stubClaude(stubDir, pipelineStubJs(join(stubDir, 'calls')));
+process.env.AUTODEV_CLAUDE_BIN = stubPath;
 
 function makeRepoWithWorktree() {
   const origin = mkdtempSync(join(tmpdir(), 'origin-'));
-  execSync('git init -q --bare', { cwd: origin });
+  git(origin, ['init', '-q', '--bare']);
   const wt = mkdtempSync(join(tmpdir(), 'wt-'));
-  execSync(`git init -q && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init && git remote add origin ${origin} && git checkout -qb autodev/001-x`, { cwd: wt, shell: '/bin/bash' });
-  writeFileSync(join(wt, 'package.json'), JSON.stringify({ scripts: { test: 'exit 0' } }));
-  execSync('git add -A && git -c user.email=t@t -c user.name=t commit -qm pkg', { cwd: wt, shell: '/bin/bash' });
+  git(wt, ['init', '-q'], commit('init', '--allow-empty'),
+    ['remote', 'add', 'origin', origin], ['checkout', '-qb', 'autodev/001-x']);
+  writeFileSync(join(wt, 'package.json'), JSON.stringify({ scripts: { test: 'node -e ""' } }));
+  git(wt, ['add', '-A'], commit('pkg'));
   return wt;
 }
 
@@ -57,7 +40,7 @@ test('runner drives a run through all seven stages to DONE', () => {
 
 test('runner parks a run when a stage keeps failing, resume re-enters at that stage', () => {
   // break the stub for review: always REQUEST_CHANGES
-  writeFileSync(join(stubDir, 'claude'), readFileSync(join(stubDir, 'claude'), 'utf8')
+  writeFileSync(stubPath, readFileSync(stubPath, 'utf8')
     .replace('APPROVE', 'REQUEST_CHANGES'));
   const db = openDb();
   const wt = makeRepoWithWorktree();
@@ -75,7 +58,7 @@ test('runner parks a run when a stage keeps failing, resume re-enters at that st
     .split('\n').filter(l => /code.review/.test(l));
   assert.equal(reviewCalls.length, 5, `expected 5 review-stage claude calls, got ${reviewCalls.length}`);
   // fix the stub, resume
-  writeFileSync(join(stubDir, 'claude'), readFileSync(join(stubDir, 'claude'), 'utf8')
+  writeFileSync(stubPath, readFileSync(stubPath, 'utf8')
     .replace('REQUEST_CHANGES', 'APPROVE'));
   execFileSync('node', ['src/runner.js', String(id), '--resume'], { env: process.env });
   const db3 = openDb();

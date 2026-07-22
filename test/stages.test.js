@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execSync } from 'node:child_process';
 import { STAGES, findSpecDir, detectTestCmd, specDirFor, isCompleteSpecDir } from '../src/stages.js';
+import { git, commit } from './helpers.js';
 
 function gitRepo() {
   const d = mkdtempSync(join(tmpdir(), 'wt-'));
-  execSync('git init -q && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init', { cwd: d, shell: '/bin/bash' });
+  git(d, ['init', '-q'], commit('init', '--allow-empty'));
   return d;
 }
 
@@ -42,7 +42,7 @@ test('implement check requires all tasks ticked and clean tree', () => {
   assert.throws(() => STAGES[2].check({ worktree: wt }), /T002|unchecked/i);
   writeFileSync(join(d, 'tasks.md'), '- [x] T001 done\n- [X] T002 done\n');
   assert.throws(() => STAGES[2].check({ worktree: wt }), /uncommitted/i); // tasks.md change not committed
-  execSync('git add -A && git -c user.email=t@t -c user.name=t commit -qm done', { cwd: wt, shell: '/bin/bash' });
+  git(wt, ['add', '-A'], commit('done'));
   STAGES[2].check({ worktree: wt }); // no throw
 });
 

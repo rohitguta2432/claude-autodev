@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, chmodSync, readFileSync, mkdirSync, openSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, openSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
 import { execSync, execFileSync, spawn } from 'node:child_process';
+import { git, commit, stubClaude } from './helpers.js';
 
 process.env.AUTODEV_HOME = mkdtempSync(join(tmpdir(), 'autodev-cli-'));
 process.env.AUTODEV_PORT = '0'; // test provides its own server port below
@@ -16,13 +17,11 @@ process.env.AUTODEV_PORT = String(port);
 
 // stub claude that instantly succeeds nothing (runner will park; we only test kickoff mechanics)
 const stubDir = mkdtempSync(join(tmpdir(), 'stub-'));
-writeFileSync(join(stubDir, 'claude'), '#!/usr/bin/env bash\nexit 0');
-chmodSync(join(stubDir, 'claude'), 0o755);
-process.env.AUTODEV_CLAUDE_BIN = join(stubDir, 'claude');
+process.env.AUTODEV_CLAUDE_BIN = stubClaude(stubDir, '');
 
 test('autodev run creates worktree, branch, registers run, spawns runner', async () => {
   const repo = mkdtempSync(join(tmpdir(), 'repo-'));
-  execSync('git init -q -b main && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m init', { cwd: repo, shell: '/bin/bash' });
+  git(repo, ['init', '-q', '-b', 'main'], commit('init', '--allow-empty'));
   const out = execFileSync('node', ['bin/autodev.js', 'run', 'add a health endpoint', '--repo', repo, '--no-spawn'], { encoding: 'utf8' });
   assert.match(out, /run #1/i);
   const db = openDb();
@@ -37,12 +36,12 @@ test('autodev run creates worktree, branch, registers run, spawns runner', async
 
 function repoWithCompleteSpec() {
   const repo = mkdtempSync(join(tmpdir(), 'repo-'));
-  execSync('git init -q -b main', { cwd: repo, shell: '/bin/bash' });
+  git(repo, ['init', '-q', '-b', 'main']);
   mkdirSync(join(repo, 'specs/001-rate-limit'), { recursive: true });
   writeFileSync(join(repo, 'specs/001-rate-limit/spec.md'), '# spec\n');
   writeFileSync(join(repo, 'specs/001-rate-limit/plan.md'), '# plan\n');
   writeFileSync(join(repo, 'specs/001-rate-limit/tasks.md'), '- [ ] T001 x\n');
-  execSync('git add -A && git -c user.email=t@t -c user.name=t commit -q -m init', { cwd: repo, shell: '/bin/bash' });
+  git(repo, ['add', '-A'], commit('init'));
   return repo;
 }
 
@@ -69,7 +68,7 @@ test('autodev run leaves stage 1 and prints nothing extra when requirement does 
 test('autodev run --spec <path> pointing at incomplete dir fails cleanly: exit non-zero, no run row, no worktree', () => {
   const repo = repoWithCompleteSpec();
   writeFileSync(join(repo, 'specs/001-rate-limit/tasks.md'), ''); // make it incomplete
-  execSync('git add -A && git -c user.email=t@t -c user.name=t commit -q -m incomplete', { cwd: repo, shell: '/bin/bash' });
+  git(repo, ['add', '-A'], commit('incomplete'));
   const db = openDb();
   const before = listRuns(db).length;
   db.close();
@@ -110,16 +109,16 @@ test('stop kills the runner\'s whole process group, including the claude child',
   db.close();
   mkdirSync(runDir(id), { recursive: true });
 
-  // stub claude that records its own pid (bash's, since there's no exec) then sleeps —
-  // simulating a long-running edit/commit/push session still in the runner's process group.
+  // stub claude that records its own pid then sleeps — simulating a long-running
+  // edit/commit/push session still in the runner's process group.
   const pidFile = join(worktree, 'claude.pid');
   const stubDir2 = mkdtempSync(join(tmpdir(), 'stub-sleep-'));
-  writeFileSync(join(stubDir2, 'claude'), `#!/usr/bin/env bash\necho $$ > ${pidFile}\nsleep 30\n`);
-  chmodSync(join(stubDir2, 'claude'), 0o755);
+  const sleepStub = stubClaude(stubDir2,
+    `require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));\nsetTimeout(() => {}, 30000);\n`);
 
   const log = openSync(join(runDir(id), 'runner.log'), 'a');
   const runner = spawn('node', ['src/runner.js', String(id)],
-    { detached: true, stdio: ['ignore', log, log], env: { ...process.env, AUTODEV_CLAUDE_BIN: join(stubDir2, 'claude') } });
+    { detached: true, stdio: ['ignore', log, log], env: { ...process.env, AUTODEV_CLAUDE_BIN: sleepStub } });
   runner.unref();
   const runnerPid = runner.pid;
 

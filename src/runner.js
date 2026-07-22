@@ -34,7 +34,9 @@ function runClaude(prompt, stageN) {
     ? ['-p', prompt] // stub in tests
     : ['-p', prompt, '--dangerously-skip-permissions', '--settings', hooksFile, '--output-format', 'json',
        ...(model ? ['--model', model] : [])];
-  const raw = execFileSync(bin, args, {
+  // A .js AUTODEV_CLAUDE_BIN (test stubs) runs via node — extensionless scripts can't spawn on Windows.
+  const [file, argv] = bin.endsWith('.js') ? [process.execPath, [bin, ...args]] : [bin, args];
+  const raw = execFileSync(file, argv, {
     cwd: run.worktree, encoding: 'utf8', timeout: CFG.stageTimeoutMin * 60_000,
     env: { ...process.env, AUTODEV_RUN: String(runId), AUTODEV_RUN_DIR: ctx.runDir,
       AUTODEV_PORT: String(ctx.port), AUTODEV_STAGE: String(stageN) },

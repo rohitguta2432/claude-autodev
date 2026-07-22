@@ -5,7 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 process.env.AUTODEV_HOME = mkdtempSync(join(tmpdir(), 'autodev-srv-'));
-process.env.AUTODEV_CLAUDE_BIN = '/bin/true'; // jump spawns a real runner — never let it reach the real claude
+// jump spawns a real runner — never let it reach the real claude (portable no-op node stub)
+const stubDir = mkdtempSync(join(tmpdir(), 'srv-stub-'));
+writeFileSync(join(stubDir, 'claude-stub.js'), '');
+process.env.AUTODEV_CLAUDE_BIN = join(stubDir, 'claude-stub.js');
 const { startServer } = await import('../src/server.js');
 const { runDir } = await import('../src/db.js');
 
