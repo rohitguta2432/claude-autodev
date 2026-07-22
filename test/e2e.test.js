@@ -27,12 +27,17 @@ test('CLI kickoff → runner → DONE, events visible via API', async () => {
 
   execFileSync('node', ['bin/autodev.js', 'run', 'demo feature', '--repo', repo], { env: process.env });
   let run;
-  for (let i = 0; i < 100; i++) { // ≤10s
+  // ≤60s. Seven stubbed stages each spawn node and touch the disk; 10s was enough on
+  // CI runners but not on a real workstation (antivirus on spawn, slower I/O), so the
+  // suite went red on contributors' machines while CI stayed green. The loop exits as
+  // soon as the run settles, so a fast machine pays nothing for the larger ceiling.
+  for (let i = 0; i < 600; i++) {
     run = await (await fetch(`http://127.0.0.1:${port}/api/runs/1`)).json();
     if (run.status === 'DONE' || run.status === 'BLOCKED') break;
     await new Promise(r => setTimeout(r, 100));
   }
-  assert.equal(run.status, 'DONE');
+  assert.equal(run.status, 'DONE',
+    `run settled as ${run.status}${run.blocked_reason ? ` — ${run.blocked_reason}` : ''} (stage ${run.stage})`);
   const types = run.events.map(e => e.type);
   assert.ok(types.includes('stage_started') && types.includes('run_done'));
 });
