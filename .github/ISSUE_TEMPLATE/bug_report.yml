@@ -1,0 +1,65 @@
+name: Bug report
+description: Something in autodev behaved incorrectly
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Most autodev bugs are environment-shaped — OS, Node version, or a missing
+        prerequisite. `autodev doctor` answers nearly all of that in one paste, so
+        please include it; it makes the difference between a same-day fix and a
+        week of round-trips.
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: autodev doctor
+      description: Output of `autodev doctor` run from the repo you pointed autodev at.
+      render: text
+      placeholder: |
+        [ PASS ] node >= 22.5 — found 22.12.0
+        [ FAIL ] claude CLI on PATH — not found — install from https://claude.com/claude-code
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: autodev version
+      description: "`npm ls -g claude-autodev`, or the tag/commit you installed from."
+      placeholder: v0.2.1
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [Windows, macOS, Linux, Other]
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+      description: Include the exact command you ran.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Run artifacts (optional)
+      description: |
+        For a parked run, `~/.autodev/runs/<id>/blocked.md` is the diagnosis, and
+        `runner.log` alongside it has the detail. Redact anything private first —
+        these files quote your repo's content and your requirement text.
+      render: text
+
+  - type: checkboxes
+    id: selftest
+    attributes:
+      label: Pre-flight
+      options:
+        - label: "`autodev selftest` passes (if it does not, paste its output above — that is the bug)"
