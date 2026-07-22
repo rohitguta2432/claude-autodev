@@ -89,11 +89,11 @@ export const stageN = (x) => {
 
 export const STAGES = [
   {
-    n: 1, key: 'spec', title: 'Spec', skill: 'specs-skill / spec-kit',
+    n: 1, key: 'spec', title: 'Spec', skill: 'autodev-specs / spec-kit',
     // Bug runs get a repro-first light spec; the artifact check below stays identical.
     prompt: (run) => run.issue_type === 'bug'
       ? `This is a BUG FIX run. Requirement (from Jira ${run.jira_key ?? ''}): ${run.requirement}\nUse the systematic-debugging skill if installed; regardless, work repro-first: reproduce the bug, isolate the root cause, and write a FAILING regression test before any fix. Record your findings as a lightweight spec set specs/NNN-slug/ containing spec.md (observed vs expected behaviour, repro steps, root cause), plan.md (the fix approach and blast radius), and tasks.md (ordered checkbox tasks \`- [ ] T001 ...\`: regression test first, then the fix, then verification). Do not fix anything yet — later stages implement tasks.md.`
-      : `First check specs/ for an existing spec set covering this requirement. If a complete one exists (spec.md, plan.md, tasks.md), adopt it and do not create a duplicate; if one exists but is incomplete, complete the missing documents in place. Only create a brand-new specs/NNN-slug/ set if nothing matches. Requirement: ${run.requirement}\nUse the specs-skill skill if it is installed; otherwise create a GitHub Spec Kit document set yourself: specs/NNN-slug/ containing spec.md (user scenarios, functional requirements, success criteria), plan.md (technical approach), research.md (decisions & rationale), data-model.md (entities/schema), quickstart.md (run & verify steps), contracts/ (API/interface specs), tasks.md (ordered checkbox tasks \`- [ ] T001 ...\`), and checklists/ (quality gates) as appropriate.`,
+      : `First check specs/ for an existing spec set covering this requirement. If a complete one exists (spec.md, plan.md, tasks.md), adopt it and do not create a duplicate; if one exists but is incomplete, complete the missing documents in place. Only create a brand-new specs/NNN-slug/ set if nothing matches. Requirement: ${run.requirement}\nUse the autodev-specs skill if it is installed; otherwise create a GitHub Spec Kit document set yourself: specs/NNN-slug/ containing spec.md (user scenarios, functional requirements, success criteria), plan.md (technical approach), research.md (decisions & rationale), data-model.md (entities/schema), quickstart.md (run & verify steps), contracts/ (API/interface specs), tasks.md (ordered checkbox tasks \`- [ ] T001 ...\`), and checklists/ (quality gates) as appropriate.`,
     check: (run) => {
       for (const f of ['spec.md', 'plan.md', 'tasks.md']) {
         const p = specFile(run, f);

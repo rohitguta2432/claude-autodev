@@ -1,5 +1,5 @@
 ---
-name: specs-skill
+name: autodev-specs
 description: >-
   Produce a complete GitHub Spec Kit document set for a requirement under
   specs/NNN-slug/ — spec.md, plan.md, research.md, data-model.md,

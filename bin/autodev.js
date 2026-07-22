@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, openSync, copyFileSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, openSync, copyFileSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 import { join, dirname, basename, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -204,14 +204,31 @@ if (cmd === 'run') {
   const failures = printChecks(await doctor(repoArg ? resolve(repoArg) : process.cwd()));
   console.log(failures.length ? `\n${failures.length} check(s) failed` : '\nall checks passed');
   process.exit(failures.length ? 1 : 0);
-} else if (cmd === 'install-skill') {
+} else if (cmd === 'install-skill' || cmd === 'uninstall-skill') {
+  // --project installs into ./.claude/skills (this repo only) instead of ~/.claude/skills
+  // (every project on the machine) — autodev-specs matches generic "write a spec" asks,
+  // so machine-global install is a deliberate choice, not the silent default consequence.
+  const root = rest.includes('--project')
+    ? join(process.cwd(), '.claude', 'skills') : join(homedir(), '.claude', 'skills');
+  const force = rest.includes('--force');
   // [repo path under skill/, installed skill name]
-  for (const [src, name] of [['SKILL.md', 'autodev'], [join('specs-skill', 'SKILL.md'), 'specs-skill']]) {
-    const dest = join(homedir(), '.claude', 'skills', name, 'SKILL.md');
+  const skills = [['SKILL.md', 'autodev'], [join('autodev-specs', 'SKILL.md'), 'autodev-specs']];
+  for (const [src, name] of skills) {
+    const dest = join(root, name, 'SKILL.md');
+    if (cmd === 'uninstall-skill') {
+      rmSync(join(root, name), { recursive: true, force: true });
+      console.log(`removed skill: ${join(root, name)}`);
+      continue;
+    }
+    const srcBody = readFileSync(join(ROOT, 'skill', src), 'utf8');
+    if (existsSync(dest) && readFileSync(dest, 'utf8') !== srcBody && !force) {
+      console.error(`SKIPPED ${dest} — exists with different content (edited or another tool's skill). Re-run with --force to overwrite.`);
+      continue;
+    }
     mkdirSync(dirname(dest), { recursive: true });
     copyFileSync(join(ROOT, 'skill', src), dest);
     console.log(`installed skill: ${dest}`);
   }
 } else {
-  console.log('usage: autodev run "<requirement>" [--repo <path>] [--spec <path>] [--branch <name>] [--test-cmd <cmd>] | status | resume <id> | stop <id> | cost <id> | doctor [path] | install-skill');
+  console.log('usage: autodev run "<requirement>" [--repo <path>] [--spec <path>] [--branch <name>] [--test-cmd <cmd>] [--until <stage>] [--no-push] | status | resume <id> | stop <id> | cost <id> | doctor [path] | install-skill [--project] [--force] | uninstall-skill [--project]');
 }

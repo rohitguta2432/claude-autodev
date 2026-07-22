@@ -80,15 +80,31 @@ test('autodev run --spec <path> pointing at incomplete dir fails cleanly: exit n
   assert.ok(!existsSync(join(process.env.AUTODEV_WORKTREES, basename(repo))));
 });
 
-test('autodev install-skill copies autodev + specs-skill into ~/.claude/skills/', () => {
+test('install-skill: installs autodev + autodev-specs, warns on foreign overwrite, uninstalls', () => {
   const home = mkdtempSync(join(tmpdir(), 'home-'));
-  execFileSync('node', ['bin/autodev.js', 'install-skill'], { encoding: 'utf8', env: { ...process.env, HOME: home } });
+  const env = { ...process.env, HOME: home };
+  execFileSync('node', ['bin/autodev.js', 'install-skill'], { encoding: 'utf8', env });
   const dest = join(home, '.claude/skills/autodev/SKILL.md');
-  assert.ok(existsSync(dest));
   assert.equal(readFileSync(dest, 'utf8'), readFileSync('skill/SKILL.md', 'utf8'));
-  const specDest = join(home, '.claude/skills/specs-skill/SKILL.md');
-  assert.ok(existsSync(specDest));
-  assert.equal(readFileSync(specDest, 'utf8'), readFileSync('skill/specs-skill/SKILL.md', 'utf8'));
+  const specDest = join(home, '.claude/skills/autodev-specs/SKILL.md');
+  assert.equal(readFileSync(specDest, 'utf8'), readFileSync('skill/autodev-specs/SKILL.md', 'utf8'));
+  // a locally-edited skill is not silently clobbered…
+  writeFileSync(specDest, 'my local edits\n');
+  const out = execFileSync('node', ['bin/autodev.js', 'install-skill'], { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] });
+  assert.equal(readFileSync(specDest, 'utf8'), 'my local edits\n');
+  // …unless --force
+  execFileSync('node', ['bin/autodev.js', 'install-skill', '--force'], { encoding: 'utf8', env });
+  assert.equal(readFileSync(specDest, 'utf8'), readFileSync('skill/autodev-specs/SKILL.md', 'utf8'));
+  execFileSync('node', ['bin/autodev.js', 'uninstall-skill'], { encoding: 'utf8', env });
+  assert.ok(!existsSync(dest) && !existsSync(specDest));
+});
+
+test('install-skill --project installs under ./.claude/skills of the cwd', () => {
+  const proj = mkdtempSync(join(tmpdir(), 'proj-'));
+  execFileSync('node', [join(process.cwd(), 'bin/autodev.js'), 'install-skill', '--project'],
+    { encoding: 'utf8', cwd: proj });
+  assert.ok(existsSync(join(proj, '.claude/skills/autodev/SKILL.md')));
+  assert.ok(existsSync(join(proj, '.claude/skills/autodev-specs/SKILL.md')));
 });
 
 const isAlive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };

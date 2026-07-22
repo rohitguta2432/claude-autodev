@@ -30,7 +30,7 @@ const p = String(process.argv[3] ?? '');
 ${callsFile ? `fs.appendFileSync(${JSON.stringify(callsFile)}, p.slice(0, 60) + '\\n');` : ''}
 const git = (...a) => cp.execFileSync('git', a, { stdio: 'ignore' });
 const commitAll = (m) => { git('add', '-A'); git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', m); };
-if (p.includes('specs-skill')) {
+if (p.includes('autodev-specs')) {
   fs.mkdirSync('specs/001-x/checklists', { recursive: true });
   const spec = '# spec\\ncontent...............................................\\n';
   fs.writeFileSync('specs/001-x/spec.md', spec);
