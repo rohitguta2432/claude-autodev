@@ -8,6 +8,7 @@ import { PORT, runDir, openDb, createRun, getRun, listRuns, updateRun } from '..
 import { emit } from '../src/events.js';
 import { specDirFor, isCompleteSpecDir, STAGES } from '../src/stages.js';
 import { parseJiraRef, fetchIssue } from '../src/jira.js';
+import { doctor, printChecks } from '../src/doctor.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const base = () => `http://127.0.0.1:${PORT()}`;
@@ -57,6 +58,10 @@ function parseRunArgs(args) {
 if (cmd === 'run') {
   let { requirement, repoPath, noSpawn, specArg, branchArg, testCmd } = parseRunArgs(rest);
   if (!requirement) { console.error('usage: autodev run "<requirement>"|<JIRA-KEY> [--repo <path>] [--spec <path>] [--branch <name>] [--test-cmd <cmd>]'); process.exit(1); }
+
+  // Preflight — a stranger's first failure should cost five seconds, not a parked run.
+  const failures = printChecks((await doctor(repoPath)).filter(c => c.severity !== 'pass'));
+  if (failures.length) { console.error(`\n${failures.length} preflight check(s) failed — fix and re-run (autodev doctor to re-check)`); process.exit(1); }
 
   // Jira mode: "autodev run CV-123" (or a browse URL) — resolve the ticket into the
   // requirement before anything else, so spec matching and slug use the real summary.
@@ -135,6 +140,11 @@ if (cmd === 'run') {
   db.close();
   await emit({ runDir: runDir(id), port: PORT() }, { run: id, type: 'parked', stage: run.stage, detail: 'stopped by user' });
   console.log(`run #${id} stopped`);
+} else if (cmd === 'doctor') {
+  const repoArg = rest[0] === '--repo' ? rest[1] : rest[0];
+  const failures = printChecks(await doctor(repoArg ? resolve(repoArg) : process.cwd()));
+  console.log(failures.length ? `\n${failures.length} check(s) failed` : '\nall checks passed');
+  process.exit(failures.length ? 1 : 0);
 } else if (cmd === 'install-skill') {
   // [repo path under skill/, installed skill name]
   for (const [src, name] of [['SKILL.md', 'autodev'], [join('specs-skill', 'SKILL.md'), 'specs-skill']]) {
@@ -144,5 +154,5 @@ if (cmd === 'run') {
     console.log(`installed skill: ${dest}`);
   }
 } else {
-  console.log('usage: autodev run "<requirement>" [--repo <path>] [--spec <path>] [--branch <name>] [--test-cmd <cmd>] | status | resume <id> | stop <id> | install-skill');
+  console.log('usage: autodev run "<requirement>" [--repo <path>] [--spec <path>] [--branch <name>] [--test-cmd <cmd>] | status | resume <id> | stop <id> | doctor [path] | install-skill');
 }
