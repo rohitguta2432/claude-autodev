@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { randomBytes } from 'node:crypto';
 import { readFileSync, existsSync, openSync, mkdirSync, appendFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { join, dirname, extname } from 'node:path';
@@ -64,14 +65,31 @@ function crossOrigin(req) {
   try { return new URL(origin).host !== req.headers.host; } catch { return true; }
 }
 
+// DNS-rebinding defense: we only ever serve localhost, so any other Host is an
+// attacker-controlled name resolving to 127.0.0.1 — reject before routing.
+function badHost(req) {
+  const hostname = String(req.headers.host ?? '').replace(/:\d+$/, '');
+  return !['127.0.0.1', 'localhost', '[::1]'].includes(hostname);
+}
+
 export async function startServer({ port = PORT(), dbPath } = {}) {
   const db = openDb(dbPath);
   const clients = new Set();
+  // Per-session CSRF token: injected into the served index.html, required on
+  // browser-marked mutating requests. Local tooling (CLI/runner — no browser
+  // headers) is exempt; a foreign page can neither read the token (SOP) nor
+  // reach the routes without browser markers.
+  const token = randomBytes(16).toString('hex');
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
     const json = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)); };
     try {
+      if (badHost(req)) return json(403, { error: 'bad host' });
       if (req.method === 'POST' && crossOrigin(req)) return json(403, { error: 'cross-origin request rejected' });
+      // Browser-marked POSTs (Origin/Sec-Fetch-Site present) must carry the session token.
+      if (req.method === 'POST' && (req.headers.origin || req.headers['sec-fetch-site'])
+          && req.headers['x-autodev-token'] !== token)
+        return json(403, { error: 'missing or stale dashboard token — reload the page' });
       if (req.method === 'POST' && url.pathname === '/runs')
         return json(201, { id: createRun(db, await body(req)) });
       if (req.method === 'POST' && url.pathname === '/events') {
@@ -152,6 +170,9 @@ export async function startServer({ port = PORT(), dbPath } = {}) {
       const file = join(PUB, url.pathname === '/' ? 'index.html' : url.pathname);
       if (file.startsWith(PUB) && existsSync(file)) {
         res.writeHead(200, { 'content-type': MIME[extname(file)] || 'application/octet-stream' });
+        if (file.endsWith('index.html')) // hand the session token to our own page only
+          return res.end(readFileSync(file, 'utf8')
+            .replace('</head>', `<script>window.AUTODEV_TOKEN=${JSON.stringify(token)}</script>\n</head>`));
         return res.end(readFileSync(file));
       }
       json(404, { error: 'not found' });

@@ -421,7 +421,7 @@ async function jumpTo(n) {
   const { r } = fpCache;
   if (!confirm(`Jump run #${r.id} to stage ${n} (${TITLES[n-1]})?\nThe runner restarts from that stage.`)) return;
   const res = await fetch(`/api/runs/${r.id}/jump`, { method:'POST',
-    headers:{'content-type':'application/json'}, body: JSON.stringify({ stage: n }) });
+    headers:{'content-type':'application/json','x-autodev-token':window.AUTODEV_TOKEN}, body: JSON.stringify({ stage: n }) });
   const out = await res.json();
   if (!res.ok) return alert(out.error || 'jump failed');
   selStage = null; load();
@@ -430,7 +430,7 @@ async function skipTo(n) {
   const { r } = fpCache;
   if (!confirm(`Skip stage ${n} (${TITLES[n-1]}) for run #${r.id}?\nIt won't run; the pipeline continues past it.`)) return;
   const res = await fetch(`/api/runs/${r.id}/skip`, { method:'POST',
-    headers:{'content-type':'application/json'}, body: JSON.stringify({ stage: n }) });
+    headers:{'content-type':'application/json','x-autodev-token':window.AUTODEV_TOKEN}, body: JSON.stringify({ stage: n }) });
   const out = await res.json();
   if (!res.ok) return alert(out.error || 'skip failed');
   selStage = null; load();

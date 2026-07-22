@@ -158,11 +158,28 @@ test('cross-origin POSTs are rejected, headerless (CLI) and same-origin POSTs pa
     headers: { 'content-type': 'application/json', 'sec-fetch-site': 'cross-site' },
     body: JSON.stringify({ stage: 3 }) });
   assert.equal(sfs.status, 403);
-  // dashboard's own fetch: same-origin markers pass the guard
+  // dashboard's own fetch: same-origin markers + the session token injected into index.html
+  const html = await (await fetch(`${base}/`)).text();
+  const token = html.match(/AUTODEV_TOKEN="([0-9a-f]+)"/)[1];
   const same = await fetch(`${base}/events`, { method: 'POST',
-    headers: { 'content-type': 'application/json', origin: `http://127.0.0.1:${port}`, 'sec-fetch-site': 'same-origin' },
+    headers: { 'content-type': 'application/json', origin: `http://127.0.0.1:${port}`,
+      'sec-fetch-site': 'same-origin', 'x-autodev-token': token },
     body: JSON.stringify({ run: 1, type: 'activity', stage: 1 }) });
   assert.equal(same.status, 200);
+  // same-origin markers WITHOUT the token (e.g. DNS-rebound page) → rejected
+  const noToken = await fetch(`${base}/events`, { method: 'POST',
+    headers: { 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' },
+    body: JSON.stringify({ run: 1, type: 'activity' }) });
+  assert.equal(noToken.status, 403);
+  // wrong Host header (DNS rebinding) → rejected outright. fetch() strips a
+  // custom Host (forbidden header), so probe with raw node:http.
+  const { request } = await import('node:http');
+  const rebindStatus = await new Promise((res, rej) => {
+    const q = request({ host: '127.0.0.1', port, path: '/api/runs', headers: { Host: 'evil.example:4590' } },
+      (r) => { r.resume(); res(r.statusCode); });
+    q.on('error', rej); q.end();
+  });
+  assert.equal(rebindStatus, 403);
   // CLI/runner: no browser headers at all — trusted local tooling (covered implicitly
   // by every other test in this file, asserted once explicitly here)
   const cli = await fetch(`${base}/events`, { method: 'POST', headers: { 'content-type': 'application/json' },
