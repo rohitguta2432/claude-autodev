@@ -144,3 +144,15 @@ test('autodev run --test-cmd stores the override on the run row', () => {
   const run = listRuns(db)[0]; db.close();
   assert.equal(run.test_cmd, 'make check');
 });
+
+test('autodev run --no-push and --until store the stage cap; bad --until exits', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'repo-'));
+  git(repo, ['init', '-q', '-b', 'main'], commit('init', '--allow-empty'));
+  execFileSync('node', ['bin/autodev.js', 'run', 'capped run one', '--repo', repo, '--no-spawn', '--no-push'], { encoding: 'utf8' });
+  const db = openDb();
+  assert.equal(listRuns(db)[0].until_stage, 4); db.close();
+  execFileSync('node', ['bin/autodev.js', 'run', 'capped run two', '--repo', repo, '--no-spawn', '--until', 'analyze'], { encoding: 'utf8' });
+  const db2 = openDb();
+  assert.equal(listRuns(db2)[0].until_stage, 2); db2.close();
+  assert.throws(() => execFileSync('node', ['bin/autodev.js', 'run', 'x', '--repo', repo, '--no-spawn', '--until', 'nonsense'], { stdio: 'pipe' }), /--until wants/s);
+});

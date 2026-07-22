@@ -79,6 +79,14 @@ const specFile = (run, f) => {
   return join(d, f);
 };
 
+// "verify" or "4" → 4; null on anything unknown.
+export const stageN = (x) => {
+  const byKey = STAGES.find(s => s.key === String(x).toLowerCase())?.n;
+  if (byKey) return byKey;
+  const n = Number(x);
+  return n >= 1 && n <= STAGES.length ? n : null;
+};
+
 export const STAGES = [
   {
     n: 1, key: 'spec', title: 'Spec', skill: 'specs-skill / spec-kit',

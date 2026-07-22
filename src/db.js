@@ -18,10 +18,10 @@ export function openDb(path = join(AUTODEV_HOME(), 'autodev.db')) {
     status TEXT NOT NULL DEFAULT 'RUNNING',
     stage INTEGER NOT NULL DEFAULT 1,
     pid INTEGER, pr_url TEXT, blocked_reason TEXT,
-    jira_key TEXT, issue_type TEXT, skipped TEXT, test_cmd TEXT,
+    jira_key TEXT, issue_type TEXT, skipped TEXT, test_cmd TEXT, until_stage INTEGER,
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
   // migrate pre-existing DBs — ALTER is a no-op error when the column already exists
-  for (const col of ['jira_key TEXT', 'issue_type TEXT', 'skipped TEXT', 'test_cmd TEXT']) {
+  for (const col of ['jira_key TEXT', 'issue_type TEXT', 'skipped TEXT', 'test_cmd TEXT', 'until_stage INTEGER']) {
     try { db.exec(`ALTER TABLE runs ADD COLUMN ${col}`); } catch { /* already there */ }
   }
   return db;
@@ -30,10 +30,10 @@ export function openDb(path = join(AUTODEV_HOME(), 'autodev.db')) {
 export function createRun(db, r) {
   const now = Date.now();
   const res = db.prepare(`INSERT INTO runs
-    (slug, repo, repo_path, worktree, branch, requirement, stage, jira_key, issue_type, test_cmd, created_at, updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+    (slug, repo, repo_path, worktree, branch, requirement, stage, jira_key, issue_type, test_cmd, until_stage, created_at, updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(r.slug, r.repo, r.repo_path, r.worktree, r.branch, r.requirement, r.stage ?? 1,
-         r.jira_key ?? null, r.issue_type ?? null, r.test_cmd ?? null, now, now);
+         r.jira_key ?? null, r.issue_type ?? null, r.test_cmd ?? null, r.until_stage ?? null, now, now);
   return Number(res.lastInsertRowid);
 }
 

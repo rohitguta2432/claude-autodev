@@ -113,3 +113,34 @@ test('runner parks before starting a session beyond maxCostUsd; cost CLI sums me
   assert.match(out, /stage 1 Spec/);
   assert.match(out, /\$2\.00/);
 });
+
+test('--until: runner stops cleanly after the named stage, DONE not BLOCKED', () => {
+  const db = openDb();
+  const wt = makeRepoWithWorktree();
+  const id = createRun(db, { slug: 'u', repo: 'demo', repo_path: wt, worktree: wt,
+    branch: 'autodev/001-x', requirement: 'demo', until_stage: 2 });
+  db.close();
+  execFileSync('node', ['src/runner.js', String(id)], { env: process.env });
+  const db2 = openDb();
+  const run = getRun(db2, id); db2.close();
+  assert.equal(run.status, 'DONE');
+  assert.equal(run.stage, 2); // never advanced past Analyze
+  const events = readFileSync(join(runDir(id), 'events.jsonl'), 'utf8');
+  assert.doesNotMatch(events, /"stage":5,"detail":"Push"/); // push never started
+  assert.match(events, /stopped after stage 2/);
+});
+
+test('.autodev.json "push": false caps the run at Verify', () => {
+  const db = openDb();
+  const wt = makeRepoWithWorktree();
+  writeFileSync(join(wt, '.autodev.json'), JSON.stringify({ push: false }));
+  git(wt, ['add', '-A'], commit('cfg'));
+  const id = createRun(db, { slug: 'np', repo: 'demo', repo_path: wt, worktree: wt,
+    branch: 'autodev/001-x', requirement: 'demo' });
+  db.close();
+  execFileSync('node', ['src/runner.js', String(id)], { env: process.env });
+  const db2 = openDb();
+  const run = getRun(db2, id); db2.close();
+  assert.equal(run.status, 'DONE');
+  assert.equal(run.stage, 4); // Verify is the last stage that ran
+});

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { PORT, runDir, openDb, createRun, getRun, listRuns, updateRun } from '../src/db.js';
 import { emit } from '../src/events.js';
-import { specDirFor, isCompleteSpecDir, STAGES } from '../src/stages.js';
+import { specDirFor, isCompleteSpecDir, STAGES, stageN } from '../src/stages.js';
 import { parseJiraRef, fetchIssue } from '../src/jira.js';
 import { doctor, printChecks } from '../src/doctor.js';
 
@@ -43,21 +43,27 @@ function parseRunArgs(args) {
   let specArg = null;
   let branchArg = null;
   let testCmd = null;
+  let until = null;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--repo') { repoPath = args[++i]; }
     else if (a === '--spec') { specArg = args[++i]; }
     else if (a === '--branch') { branchArg = args[++i]; }
     else if (a === '--test-cmd') { testCmd = args[++i]; }
+    else if (a === '--until') {
+      until = stageN(args[++i]);
+      if (!until) { console.error(`--until wants a stage 1-${STAGES.length} or a name: ${STAGES.map(s => s.key).join('|')}`); process.exit(1); }
+    }
+    else if (a === '--no-push') { until = stageN('verify'); } // stop before anything leaves the machine
     else if (a === '--no-spawn') { noSpawn = true; }
     else words.push(a);
   }
-  return { requirement: words.join(' '), repoPath: resolve(repoPath), noSpawn, specArg, branchArg, testCmd };
+  return { requirement: words.join(' '), repoPath: resolve(repoPath), noSpawn, specArg, branchArg, testCmd, until };
 }
 
 if (cmd === 'run') {
-  let { requirement, repoPath, noSpawn, specArg, branchArg, testCmd } = parseRunArgs(rest);
-  if (!requirement) { console.error('usage: autodev run "<requirement>"|<JIRA-KEY> [--repo <path>] [--spec <path>] [--branch <name>] [--test-cmd <cmd>]'); process.exit(1); }
+  let { requirement, repoPath, noSpawn, specArg, branchArg, testCmd, until } = parseRunArgs(rest);
+  if (!requirement) { console.error('usage: autodev run "<requirement>"|<JIRA-KEY> [--repo <path>] [--spec <path>] [--branch <name>] [--test-cmd <cmd>] [--until <stage>] [--no-push]'); process.exit(1); }
 
   // Preflight — a stranger's first failure should cost five seconds, not a parked run.
   const failures = printChecks((await doctor(repoPath)).filter(c => c.severity !== 'pass'));
@@ -109,7 +115,7 @@ if (cmd === 'run') {
     : ['worktree', 'add', '-b', branch, worktree];
   execFileSync('git', wtAddArgs, { cwd: repoPath });
   const id = createRun(db, { slug, repo, repo_path: repoPath, worktree, branch, requirement,
-    jira_key: jiraKey, issue_type: issueType, test_cmd: testCmd, stage: adoptedSpec ? 2 : 1 });
+    jira_key: jiraKey, issue_type: issueType, test_cmd: testCmd, until_stage: until, stage: adoptedSpec ? 2 : 1 });
   db.close();
   mkdirSync(runDir(id), { recursive: true });
   if (!noSpawn) spawnRunner(id);

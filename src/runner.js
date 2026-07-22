@@ -4,7 +4,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb, getRun, updateRun, runDir, PORT, skippedSet } from './db.js';
 import { emit } from './events.js';
-import { STAGES, detectTestCmd } from './stages.js';
+import { STAGES, stageN, detectTestCmd } from './stages.js';
 import { repoConfig, modelFor } from './config.js';
 import { parseClaudeResult } from './metrics.js';
 
@@ -117,7 +117,10 @@ if (resume) { saveState({ status: 'RUNNING', blocked_reason: null }); await ev({
 saveState({ pid: process.pid });
 
 const skipped = skippedSet(run); // stages the user skipped from the dashboard — bypassed here too
-for (const stage of STAGES.filter(s => s.n >= run.stage && !skipped.has(s.n))) {
+// Hard stop after stage N — change-controlled repos can forbid autonomous push/PR
+// outright. Precedence: --until (run row) > .autodev.json "until" > "push": false.
+const until = run.until_stage || stageN(cfg.until) || (cfg.push === false ? stageN('verify') : null) || STAGES.length;
+for (const stage of STAGES.filter(s => s.n >= run.stage && s.n <= until && !skipped.has(s.n))) {
   if (Date.now() - started > CFG.budgetHours * 3_600_000) await park(stage, new Error('wall-clock budget exceeded'));
   saveState({ stage: stage.n });
   await ev({ type: 'stage_started', stage: stage.n, detail: stage.title });
@@ -157,5 +160,6 @@ if (finalRun.pr_url) {
   }
 }
 saveState({ status: 'DONE' });
-await ev({ type: 'run_done', stage: STAGES.at(-1).n });
+await ev({ type: 'run_done', stage: until,
+  ...(until < STAGES.length ? { detail: `stopped after stage ${until} (${STAGES[until - 1].title}) as requested` } : {}) });
 db.close();
