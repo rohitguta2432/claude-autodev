@@ -117,7 +117,7 @@ export const STAGES = [
     prompt: (run) => `Use the executing-plans skill if it is installed; otherwise implement the newest specs/NNN-*/tasks.md in this repository yourself, task by task, test-driven, committing after each task and ticking each task checkbox (- [x] T###) in tasks.md as you complete it. All tests must pass before you finish.`,
     check: (run) => {
       const tasks = readFileSync(specFile(run, 'tasks.md'), 'utf8');
-      const un = tasks.match(/^- \[ \] (T\d+)/m);
+      const un = tasks.match(/^- \[ \] \**(T\d+)/m);
       need(!un, `unchecked task remains: ${un?.[1]}`);
       need(git(run.worktree, 'status --porcelain').trim() === '', 'uncommitted changes in worktree');
     },

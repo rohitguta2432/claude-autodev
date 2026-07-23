@@ -40,7 +40,7 @@ function tasksFor(run) {
     for (const line of lines) {
       const h = line.match(/^#{2,3}\s+(.+?)\s*$/);
       if (h && !/^format\b/i.test(h[1])) { group = h[1]; continue; }
-      const m = line.match(/^- \[( |x|X)\] (T\d+)\s*(.*)/);
+      const m = line.match(/^- \[( |x|X)\] \**(T\d+)\**\s*(.*)/);
       if (m) tasks.push({ id: m[2], done: m[1].toLowerCase() === 'x', text: m[3], group });
     }
     return tasks;
