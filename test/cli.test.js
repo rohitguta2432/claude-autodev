@@ -11,7 +11,7 @@ process.env.AUTODEV_PORT = '0'; // test provides its own server port below
 process.env.AUTODEV_WORKTREES = mkdtempSync(join(tmpdir(), 'wts-'));
 
 const { startServer } = await import('../src/server.js');
-const { openDb, getRun, createRun, listRuns, runDir } = await import('../src/db.js');
+const { openDb, getRun, createRun, listRuns, updateRun, runDir } = await import('../src/db.js');
 const { port, close } = await startServer({ port: 0 });
 process.env.AUTODEV_PORT = String(port);
 
@@ -179,6 +179,43 @@ test('run without recorded consent (real claude, no TTY) aborts and explains', (
   assert.throws(
     () => execFileSync('node', ['bin/autodev.js', 'run', 'x y z', '--no-spawn'], { env, stdio: 'pipe' }),
     /dangerously-skip-permissions[\s\S]*consent/);
+});
+
+test('run number comes from the reserved row id, not listRuns() order', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'repo-'));
+  git(repo, ['init', '-q', '-b', 'main'], commit('init', '--allow-empty'));
+  const db = openDb();
+  // A finished run with a HIGHER id than a still-RUNNING one. listRuns() sorts RUNNING
+  // first, so runs[0].id is not the maximum — the old `max + 1` numbering read that and
+  // handed out an NNN whose branch and worktree already belonged to the finished run.
+  const lower = createRun(db, { slug: 'older', repo: 'demo', repo_path: repo, worktree: 'w1', branch: 'b1', requirement: 'q' });
+  const higher = createRun(db, { slug: 'newer', repo: 'demo', repo_path: repo, worktree: 'w2', branch: 'b2', requirement: 'q' });
+  updateRun(db, higher, { status: 'DONE' });
+  assert.equal(listRuns(db)[0].id, lower, 'precondition: listRuns() puts the lower-id RUNNING run first');
+  db.close();
+
+  const out = execFileSync('node', ['bin/autodev.js', 'run', 'numbering probe', '--repo', repo, '--no-spawn'], { encoding: 'utf8' });
+  const nnn = String(higher + 1).padStart(3, '0');
+  assert.match(out, new RegExp(`run #${higher + 1}\\b`));
+  const db2 = openDb();
+  const run = getRun(db2, higher + 1); db2.close();
+  assert.equal(run.branch, `autodev/${nnn}-numbering-probe`);
+  assert.ok(run.worktree.endsWith(`run-${nnn}`), `worktree ${run.worktree} should end in run-${nnn}`);
+});
+
+test('a failed worktree add rolls the reserved row back — no ghost run', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'repo-'));
+  git(repo, ['init', '-q', '-b', 'main'], commit('init', '--allow-empty'));
+  const db = openDb();
+  const before = listRuns(db).length;
+  db.close();
+  // --branch adopts an existing ref; this one does not exist, so `git worktree add` fails
+  assert.throws(() => execFileSync('node',
+    ['bin/autodev.js', 'run', 'ghost probe', '--repo', repo, '--branch', 'no/such/branch', '--no-spawn'],
+    { stdio: 'pipe' }));
+  const db2 = openDb();
+  assert.equal(listRuns(db2).length, before, 'reserved row must not survive a failed kickoff');
+  db2.close();
 });
 
 test('.autodev.json branchPrefix names the run branch', () => {

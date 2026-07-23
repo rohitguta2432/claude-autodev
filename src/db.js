@@ -38,6 +38,9 @@ export function createRun(db, r) {
 }
 
 export const getRun = (db, id) => db.prepare('SELECT * FROM runs WHERE id = ?').get(id);
+// Only for rolling back a reserved row whose kickoff then failed (see bin/autodev.js) —
+// completed runs are history and are never deleted.
+export const deleteRun = (db, id) => db.prepare('DELETE FROM runs WHERE id = ?').run(id);
 // Stages the user skipped from the dashboard — stored as a comma-joined string on the run row.
 export const skippedSet = (run) => new Set(String(run?.skipped || '').split(',').filter(Boolean).map(Number));
 // In-progress first, then blocked, then everything else; newest-first within each group.

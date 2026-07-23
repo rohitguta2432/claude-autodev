@@ -5,7 +5,7 @@ import { createInterface } from 'node:readline/promises';
 import { join, dirname, basename, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
-import { PORT, runDir, openDb, createRun, getRun, listRuns, updateRun, AUTODEV_HOME } from '../src/db.js';
+import { PORT, runDir, openDb, createRun, getRun, listRuns, updateRun, deleteRun, AUTODEV_HOME } from '../src/db.js';
 import { emit } from '../src/events.js';
 import { specDirFor, isCompleteSpecDir, STAGES, stageN } from '../src/stages.js';
 import { parseJiraRef, fetchIssue } from '../src/jira.js';
@@ -130,11 +130,16 @@ if (cmd === 'run') {
   await ensureServer();
   const repo = basename(repoPath);
   const db = openDb();
-  // provisional id = current max + 1
-  // ponytail: can race with a concurrent kickoff — accepted for now, no locking.
-  const runs = listRuns(db);
-  const nnn = String((runs[0]?.id ?? 0) + 1).padStart(3, '0');
   const slug = slugify(slugSource);
+  // Reserve the row FIRST: SQLite's AUTOINCREMENT is the only collision-free source of a
+  // run number. Deriving it from a prior SELECT was wrong twice over — it raced concurrent
+  // kickoffs, and because listRuns() sorts RUNNING before DONE it could hand back an id
+  // that was not the maximum at all (one RUNNING run #3 alongside a finished #10 yields
+  // 004, whose branch/worktree already exist). Naming from the inserted id also keeps the
+  // NNN in autodev/NNN-slug equal to the run id the dashboard and `autodev status` show.
+  const id = createRun(db, { slug, repo, repo_path: repoPath, worktree: '', branch: '', requirement,
+    jira_key: jiraKey, issue_type: issueType, test_cmd: testCmd, until_stage: until, stage: adoptedSpec ? 2 : 1 });
+  const nnn = String(id).padStart(3, '0');
   const branch = branchArg || `${repoConfig(repoPath).branchPrefix || 'autodev'}/${nnn}-${slug}`;
   const wtRoot = process.env.AUTODEV_WORKTREES || join(homedir(), 'worktrees');
   const worktree = join(wtRoot, repo, `run-${nnn}`);
@@ -144,9 +149,13 @@ if (cmd === 'run') {
   const wtAddArgs = branchArg
     ? ['worktree', 'add', worktree, branch]
     : ['worktree', 'add', '-b', branch, worktree];
-  execFileSync('git', wtAddArgs, { cwd: repoPath });
-  const id = createRun(db, { slug, repo, repo_path: repoPath, worktree, branch, requirement,
-    jira_key: jiraKey, issue_type: issueType, test_cmd: testCmd, until_stage: until, stage: adoptedSpec ? 2 : 1 });
+  try { execFileSync('git', wtAddArgs, { cwd: repoPath }); }
+  catch (e) { // a failed kickoff must leave no ghost row behind — same as before the reserve
+    deleteRun(db, id); db.close();
+    console.error(`git worktree add failed: ${e.message}`);
+    process.exit(1);
+  }
+  updateRun(db, id, { branch, worktree });
   db.close();
   mkdirSync(runDir(id), { recursive: true });
   if (!noSpawn) spawnRunner(id);
