@@ -1,6 +1,6 @@
 // Shared portable test fixtures — no shell, no bash, works on win32/macOS/Linux.
 import { execFileSync } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 // Run git commands sequentially without a shell: git(cwd, ['init','-q'], ['add','-A'], …)
@@ -23,3 +23,39 @@ export function stubClaude(dir, jsBody) {
 // The full-pipeline claude stub lives in src/selftest.js (it powers
 // `autodev selftest` too) — re-exported here for the test suite.
 export { pipelineStubJs } from '../src/selftest.js';
+
+// A claude stub that always FAILS, with output and exit status the test chooses.
+// `recordTo` gets one JSON line per invocation, so a test can assert how many sessions were
+// actually spent (the assertion that matters for terminal classification) and what prompt each
+// one received (the assertion that matters for resume seeding).
+export const failingStubJs = ({ stdout = '', stderr = '', exit = 1, recordTo = null } = {}) => `
+const fs = require('node:fs');
+const p = String(process.argv[3] ?? '');
+${recordTo ? `fs.appendFileSync(${JSON.stringify(recordTo)}, JSON.stringify({ prompt: p }) + '\\n');` : ''}
+${stdout ? `process.stdout.write(${JSON.stringify(stdout)});` : ''}
+${stderr ? `process.stderr.write(${JSON.stringify(stderr)});` : ''}
+process.exit(${exit});
+`;
+
+// One invocation record per line, as written by failingStubJs.
+export function sessionsFrom(recordFile) {
+  try {
+    return readFileSync(recordFile, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+  } catch { return []; }
+}
+
+// A git repo holding several COMPLETE specs/NNN-* directories — the fixture that exposes
+// "highest-numbered directory wins" resolution.
+export function repoWithSpecs(dir, names) {
+  git(dir, ['init', '-q', '-b', 'main']);
+  for (const name of names) {
+    const d = join(dir, 'specs', name);
+    mkdirSync(join(d, 'checklists'), { recursive: true });
+    writeFileSync(join(d, 'spec.md'), `# spec for ${name}\ncontent............................\n`);
+    writeFileSync(join(d, 'plan.md'), `# plan for ${name}\ncontent............................\n`);
+    writeFileSync(join(d, 'tasks.md'), `- [ ] T001 do the ${name} work\n`);
+    writeFileSync(join(d, 'checklists', 'requirements.md'), '- [x] ok\n');
+  }
+  git(dir, ['add', '-A'], commit('specs'));
+  return dir;
+}

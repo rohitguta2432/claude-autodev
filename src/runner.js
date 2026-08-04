@@ -1,5 +1,5 @@
 import { execFileSync, execSync } from 'node:child_process';
-import { writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { writeFileSync, appendFileSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb, getRun, updateRun, runDir, PORT, skippedSet } from './db.js';
@@ -7,9 +7,13 @@ import { emit } from './events.js';
 import { STAGES, stageN, detectTestCmd } from './stages.js';
 import { repoConfig, modelFor } from './config.js';
 import { parseClaudeResult } from './metrics.js';
+import { causeLine, classify, sessionBlock } from './session.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CFG = { maxRetries: 2, reviewLoops: 3, stageTimeoutMin: 45, budgetHours: 6 };
+// The default 1 MiB is not enough for a 45-minute session under --output-format json: an
+// overflow kills the child with SIGTERM and parks the run for a reason unrelated to the work.
+const MAX_BUFFER = 64 * 1024 * 1024;
 
 const runId = Number(process.argv[2]);
 const resume = process.argv.includes('--resume');
@@ -37,6 +41,24 @@ try {
   }
 } catch {}
 
+// Sessions spent per stage, so a session block is attributable. Counted here rather than
+// taken from the outer retry index: stage 6 runs five sessions inside one attempt.
+const sessionSeq = new Map();
+
+// Node names these conditions itself and never echoes argv for them, but its wording
+// ("spawnSync /path/to/claude ETIMEDOUT") is not what an operator needs to read.
+const CODE_MSG = {
+  ETIMEDOUT: `the session was killed after the ${CFG.stageTimeoutMin}-minute stage timeout`,
+  ENOBUFS: 'the session produced more output than the capture buffer holds',
+  ENOENT: 'the claude CLI could not be launched',
+};
+
+// Evidence is worth having and never worth failing a run for (FR-007).
+function logSession(fields) {
+  try { appendFileSync(join(ctx.runDir, 'runner.log'), sessionBlock({ run: runId, ...fields })); }
+  catch { /* a read-only run dir or a full disk loses evidence, not the run */ }
+}
+
 function runClaude(prompt, stageN) {
   if (cfg.maxCostUsd && costUsd >= cfg.maxCostUsd)
     throw Object.assign(new Error(
@@ -49,11 +71,42 @@ function runClaude(prompt, stageN) {
        ...(model ? ['--model', model] : [])];
   // A .js AUTODEV_CLAUDE_BIN (test stubs) runs via node — extensionless scripts can't spawn on Windows.
   const [file, argv] = bin.endsWith('.js') ? [process.execPath, [bin, ...args]] : [bin, args];
-  const raw = execFileSync(file, argv, {
-    cwd: run.worktree, encoding: 'utf8', timeout: CFG.stageTimeoutMin * 60_000,
-    env: { ...process.env, AUTODEV_RUN: String(runId), AUTODEV_RUN_DIR: ctx.runDir,
-      AUTODEV_PORT: String(ctx.port), AUTODEV_STAGE: String(stageN) },
-  });
+  const attempt = (sessionSeq.get(stageN) ?? 0) + 1;
+  sessionSeq.set(stageN, attempt);
+  const t0 = Date.now();
+  let raw;
+  try {
+    // stdio is deliberately NOT specified: the default both forwards the session's stderr to
+    // ours (which spawnRunner has pointed at runner.log, so it stays tailable live) AND
+    // attaches it to the thrown error below. Piping would trade the first away for nothing.
+    raw = execFileSync(file, argv, {
+      cwd: run.worktree, encoding: 'utf8', timeout: CFG.stageTimeoutMin * 60_000,
+      maxBuffer: MAX_BUFFER,
+      env: { ...process.env, AUTODEV_RUN: String(runId), AUTODEV_RUN_DIR: ctx.runDir,
+        AUTODEV_PORT: String(ctx.port), AUTODEV_STAGE: String(stageN) },
+    });
+  } catch (e) {
+    // Node's message for a non-zero exit is `Command failed: <full argv>` — and argv[2] is the
+    // stage prompt, so letting it escape makes the pipeline's own instruction the run's
+    // diagnosis. That string reaches blocked.md, blocked_reason, the parked and retry events,
+    // `autodev status` and the dashboard, all at once. Build the reason from what the session
+    // actually produced instead.
+    const out = `${e.stdout ?? ''}\n${e.stderr ?? ''}`;
+    const outcome = e.code ? String(e.code) : `exit ${e.status}`;
+    // Only a FAILED session is classified — a model quoting an auth error while reasoning
+    // about one must never park a run (FR-012).
+    const hit = classify({ code: e.code, out });
+    const cause = causeLine(out);
+    const named = hit ? `${hit.reason} — ${hit.fix}` : CODE_MSG[e.code];
+    const message = named ? (cause ? `${named} (${cause})` : named)
+      : cause || `stage ${stageN} session failed (${outcome}) with no output`;
+    logSession({ stage: stageN, title: STAGES[stageN - 1]?.title ?? '?', attempt, outcome,
+      ms: Date.now() - t0, classified: hit?.code, stdout: e.stdout, stderr: e.stderr });
+    // `final` short-circuits the outer retry loop — a terminal condition parks on the first
+    // attempt instead of buying the same impossible session three times.
+    throw Object.assign(new Error(message),
+      { stdout: e.stdout, stderr: e.stderr, ...(hit ? { final: true } : {}) });
+  }
   // Per-session telemetry (tokens / model / cost) from the CLI's result JSON — one
   // metrics event per claude call, so review/fix loops surface their true spend.
   const { text, metrics } = parseClaudeResult(raw);
@@ -113,6 +166,9 @@ async function testStage(stage) {
 }
 
 // ---- main loop ----
+// Read the park reason BEFORE clearing it. Without this a resume re-issues the byte-identical
+// prompt that just failed three times and throws the diagnosis away — resume would be a retry.
+const resumeSeed = resume ? run.blocked_reason : null;
 if (resume) { saveState({ status: 'RUNNING', blocked_reason: null }); await ev({ type: 'resumed', stage: run.stage }); }
 saveState({ pid: process.pid });
 
@@ -124,7 +180,10 @@ for (const stage of STAGES.filter(s => s.n >= run.stage && s.n <= until && !skip
   if (Date.now() - started > CFG.budgetHours * 3_600_000) await park(stage, new Error('wall-clock budget exceeded'));
   saveState({ stage: stage.n });
   await ev({ type: 'stage_started', stage: stage.n, detail: stage.title });
-  let lastErr, lastOut = '';
+  // Only the stage being resumed is seeded, and only its first attempt: `lastErr` is
+  // re-declared per stage, so nothing carries into the stages after it (FR-017).
+  let lastErr = resumeSeed && stage.n === run.stage ? { message: resumeSeed } : null;
+  let lastOut = '';
   let ok = false;
   for (let attempt = 0; attempt <= CFG.maxRetries && !ok; attempt++) {
     try {
@@ -137,7 +196,11 @@ for (const stage of STAGES.filter(s => s.n >= run.stage && s.n <= until && !skip
       }
       ok = true;
     } catch (e) {
-      lastErr = e; lastOut = String(e.stdout ?? lastOut);
+      // Both channels: blocked.md's "Last output" block used to carry stdout alone, so a
+      // session that explained itself on stderr left the park with nothing to show.
+      lastErr = e;
+      lastOut = (e.stdout ?? e.stderr) !== undefined
+        ? `${e.stdout ?? ''}${e.stderr ? `\n${e.stderr}` : ''}` : lastOut;
       if (e.final) break; // stage's internal budget exhausted — no outer re-runs
       if (attempt < CFG.maxRetries) await ev({ type: 'retry', stage: stage.n, detail: String(e.message).slice(0, 200) });
     }

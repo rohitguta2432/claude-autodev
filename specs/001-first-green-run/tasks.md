@@ -31,11 +31,11 @@ Single project, existing layout: `src/`, `bin/`, `test/` at the repository root.
 
 **Purpose**: the fixtures every story's tests need. No production code.
 
-- [ ] T001 [P] Add `stubFailing({ stdout, stderr, exit, recordTo })` to `test/helpers.js` — writes
+- [x] T001 [P] Add `stubFailing({ stdout, stderr, exit, recordTo })` to `test/helpers.js` — writes
       a CommonJS Node stub that prints the given output and exits with the given code, and
       appends each invocation (its argv and the prompt it received) to `recordTo` so a test can
       assert **session count** and **prompt content**, not just the final reason.
-- [ ] T002 [P] Add `repoWithSpecs(dir, names)` to `test/helpers.js` — builds a git fixture repo
+- [x] T002 [P] Add `repoWithSpecs(dir, names)` to `test/helpers.js` — builds a git fixture repo
       containing several complete `specs/NNN-*` directories (non-empty `spec.md`, `plan.md`,
       `tasks.md`), for the US5 resolution tests.
 
@@ -51,20 +51,20 @@ their own module rather than inline in `src/runner.js`.
 **⚠️ Blocks US1 and US2 only.** US3, US4 and US5 are independent of this phase and may proceed
 in parallel with it.
 
-- [ ] T003 Create `src/session.js` exporting `causeLine(text)` — last lines carrying content,
+- [x] T003 Create `src/session.js` exporting `causeLine(text)` — last lines carrying content,
       blank and decorative lines skipped, whitespace collapsed, sliced to 300 characters, per
       [contracts/park-reason.md](./contracts/park-reason.md).
-- [ ] T004 Add `classify({ code, out })` to `src/session.js` — the three enumerated conditions in
+- [x] T004 Add `classify({ code, out })` to `src/session.js` — the three enumerated conditions in
       fixed order (`ENOENT` structural first, then not-authenticated, then allowance-exhausted),
       returning `{ code, reason, fix }` or `null`, per
       [contracts/terminal-conditions.md](./contracts/terminal-conditions.md). Rate limiting is
       deliberately excluded.
-- [ ] T005 Add `sessionBlock({ run, stage, title, attempt, outcome, ms, classified, stdout, stderr })`
+- [x] T005 Add `sessionBlock({ run, stage, title, attempt, outcome, ms, classified, stdout, stderr })`
       to `src/session.js` — returns the delimited string of
       [contracts/session-log.md](./contracts/session-log.md), each channel clamped to 1 MiB
       (first 200 KiB + elision marker + last 800 KiB), empty sections omitted. Returns a string;
       writes nothing.
-- [ ] T006 [P] Create `test/session.test.js` — unit tests for all three helpers: `causeLine` on
+- [x] T006 [P] Create `test/session.test.js` — unit tests for all three helpers: `causeLine` on
       empty/whitespace-only/multi-line input and on input longer than the cap; `classify` on each
       condition, on a non-match, and on a two-condition collision; `sessionBlock` clamping and
       section omission.
@@ -113,34 +113,34 @@ that message and no part of the stage prompt.
 
 ### Tests for User Story 1
 
-- [ ] T012 [P] [US1] `test/runner.test.js`: a failing session's `blocked_reason` contains the
+- [x] T012 [P] [US1] `test/runner.test.js`: a failing session's `blocked_reason` contains the
       stub's message, and contains **no** non-trivial substring of the stage prompt — the
       mechanical form of SC-001.
-- [ ] T013 [P] [US1] `test/runner.test.js`: both `retry` events for a failing stage carry the
+- [x] T013 [P] [US1] `test/runner.test.js`: both `retry` events for a failing stage carry the
       real reason, not the prompt; `blocked.md`'s last-output block contains text the stub wrote
       to **stderr** as well as stdout.
-- [ ] T014 [P] [US1] `test/runner.test.js`: `runner.log` contains a session block matching
+- [x] T014 [P] [US1] `test/runner.test.js`: `runner.log` contains a session block matching
       [contracts/session-log.md](./contracts/session-log.md), headed with the correct stage and
       attempt number; a **successful** session leaves no block (FR-025).
-- [ ] T015 [P] [US1] `test/runner.test.js`: a session emitting more than 1 MiB of output
+- [x] T015 [P] [US1] `test/runner.test.js`: a session emitting more than 1 MiB of output
       completes normally rather than parking (the raised buffer), and a session emitting far more
       than the block cap produces a clamped block with an elision marker.
 
 ### Implementation for User Story 1
 
-- [ ] T016 [US1] Wrap the `execFileSync` call in `runClaude` (`src/runner.js`) in `try`/`catch`.
+- [x] T016 [US1] Wrap the `execFileSync` call in `runClaude` (`src/runner.js`) in `try`/`catch`.
       In the catch, build a replacement `Error` whose message is `causeLine(stdout + stderr)`,
       falling back to the stage, attempt and exit status when both channels are empty. **Do not
       specify `stdio`** — the default forwarding is what keeps session stderr streaming live into
       `runner.log` (research R2). Pass through the already-meaningful `ENOENT`/`ETIMEDOUT`/`ENOBUFS`
       messages rather than replacing them.
-- [ ] T017 [US1] Raise `maxBuffer` to 64 MiB on the same `execFileSync` options in `src/runner.js`
+- [x] T017 [US1] Raise `maxBuffer` to 64 MiB on the same `execFileSync` options in `src/runner.js`
       — the default 1 MiB against a 45-minute `--output-format json` session is a live latent
       bug (research R1).
-- [ ] T018 [US1] In the same catch, append `sessionBlock(...)` to
+- [x] T018 [US1] In the same catch, append `sessionBlock(...)` to
       `$AUTODEV_HOME/runs/<id>/runner.log`, wrapped so that a write failure is swallowed and
       cannot change whether the run advances or parks (FR-007).
-- [ ] T019 [US1] In the stage loop's catch in `src/runner.js`, set `lastOut` from
+- [x] T019 [US1] In the stage loop's catch in `src/runner.js`, set `lastOut` from
       `e.stdout` **and** `e.stderr` rather than stdout alone, so `park()`'s last-output block
       carries both channels.
 
@@ -156,17 +156,17 @@ that message and no part of the stage prompt.
 
 ### Tests for User Story 2
 
-- [ ] T020 [P] [US2] `test/runner.test.js`: each of the three conditions produces **exactly one**
+- [x] T020 [P] [US2] `test/runner.test.js`: each of the three conditions produces **exactly one**
       recorded session — asserted by counting invocations in the stub's record file, not by
       reading the reason — and the reason names the remedy.
-- [ ] T021 [P] [US2] `test/runner.test.js`: an unmatched failure still makes the full complement
+- [x] T021 [P] [US2] `test/runner.test.js`: an unmatched failure still makes the full complement
       of attempts (fail-open, FR-011); a session that exits **zero** while printing a matching
       phrase neither parks nor classifies (FR-012); two conditions present at once resolve to the
       earlier one in the fixed order.
 
 ### Implementation for User Story 2
 
-- [ ] T022 [US2] In `runClaude`'s catch in `src/runner.js`, call `classify({ code: e.code, out })`
+- [x] T022 [US2] In `runClaude`'s catch in `src/runner.js`, call `classify({ code: e.code, out })`
       and, on a match, attach the existing `final` flag to the thrown error and fold the remedy
       into its message. No new control flow — the stage loop already honors `final`.
 
@@ -183,16 +183,16 @@ as the park-forensics change.
 
 ### Tests for User Story 4
 
-- [ ] T023 [P] [US4] `test/runner.test.js`: after a park-then-resume, the prompt recorded by the
+- [x] T023 [P] [US4] `test/runner.test.js`: after a park-then-resume, the prompt recorded by the
       stub contains the previous reason; a resume of a never-parked run contains no
       previous-failure text; two consecutive resumes carry one reason, not two concatenated; and
       a seeded attempt that succeeds makes no further attempts.
 
 ### Implementation for User Story 4
 
-- [ ] T024 [US4] In `src/runner.js`, capture `run.blocked_reason` into a local **before** the
+- [x] T024 [US4] In `src/runner.js`, capture `run.blocked_reason` into a local **before** the
       resume branch calls `saveState({ status: 'RUNNING', blocked_reason: null })`.
-- [ ] T025 [US4] Seed the stage loop's `lastErr` from that captured value for the **first attempt
+- [x] T025 [US4] Seed the stage loop's `lastErr` from that captured value for the **first attempt
       of the resumed stage only**, so the existing "A previous attempt failed its verification:"
       splice fires. Consume the seed once — `lastErr` is already re-declared per stage, which
       satisfies "must not persist into later stages" (FR-017) for free.

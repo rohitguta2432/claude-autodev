@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { git, commit, stubClaude, pipelineStubJs } from './helpers.js';
+import { git, commit, stubClaude, pipelineStubJs, failingStubJs, sessionsFrom } from './helpers.js';
 
 process.env.AUTODEV_HOME = mkdtempSync(join(tmpdir(), 'autodev-run-'));
 const { openDb, createRun, getRun, runDir } = await import('../src/db.js');
@@ -128,6 +128,156 @@ test('--until: runner stops cleanly after the named stage, DONE not BLOCKED', ()
   const events = readFileSync(join(runDir(id), 'events.jsonl'), 'utf8');
   assert.doesNotMatch(events, /"stage":5,"detail":"Push"/); // push never started
   assert.match(events, /stopped after stage 2/);
+});
+
+// ---- park diagnosis (US1) / terminal classification (US2) / resume seeding (US4) ----
+
+// A distinctive slice of the stage-1 prompt. If this ever appears in a park reason, the
+// pipeline is reporting its own instruction as the diagnosis — the defect this feature fixes.
+const PROMPT_FRAGMENT = 'First check specs/ for an existing spec set';
+
+function runWithStub(stubJs, { resumeOf = null, worktree = null } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'stub-fail-'));
+  const bin = stubClaude(dir, stubJs);
+  const wt = worktree ?? makeRepoWithWorktree();
+  let id = resumeOf;
+  if (!id) {
+    const db = openDb();
+    id = createRun(db, { slug: 'p', repo: 'demo', repo_path: wt, worktree: wt,
+      branch: 'autodev/001-x', requirement: 'demo' });
+    db.close();
+  }
+  execFileSync(process.execPath, ['src/runner.js', String(id), ...(resumeOf ? ['--resume'] : [])],
+    { env: { ...process.env, AUTODEV_CLAUDE_BIN: bin } });
+  const db2 = openDb();
+  const run = getRun(db2, id); db2.close();
+  return { id, run, wt };
+}
+
+test('a park reason is built from the session output, never from the stage prompt', () => {
+  const { id, run } = runWithStub(failingStubJs({ stdout: 'FATAL: the frobnicator is missing\n' }));
+  assert.equal(run.status, 'BLOCKED');
+  assert.match(run.blocked_reason, /frobnicator is missing/);
+  assert.doesNotMatch(run.blocked_reason, /Command failed/);
+  assert.ok(!run.blocked_reason.includes(PROMPT_FRAGMENT), // SC-001, checked not asserted
+    `park reason echoed the prompt: ${run.blocked_reason}`);
+  assert.ok(!readFileSync(join(runDir(id), 'blocked.md'), 'utf8').includes(PROMPT_FRAGMENT));
+});
+
+test('retry events carry the real reason, and blocked.md keeps stderr as well as stdout', () => {
+  const { id, run } = runWithStub(failingStubJs({
+    stdout: 'stdout-side detail\n', stderr: 'stderr-side detail\n' }));
+  const events = readFileSync(join(runDir(id), 'events.jsonl'), 'utf8')
+    .split('\n').filter(Boolean).map(l => JSON.parse(l));
+  const retries = events.filter(e => e.type === 'retry');
+  assert.equal(retries.length, 2, 'two retries before the park');
+  for (const r of retries) assert.ok(!r.detail.includes(PROMPT_FRAGMENT), `retry echoed the prompt: ${r.detail}`);
+  const blocked = readFileSync(join(runDir(id), 'blocked.md'), 'utf8');
+  assert.match(blocked, /stdout-side detail/);
+  assert.match(blocked, /stderr-side detail/); // used to be dropped entirely
+  assert.ok(run.blocked_reason.length > 0);
+});
+
+test('a failing session leaves an attributed block in runner.log; a successful one leaves none', () => {
+  const { id } = runWithStub(failingStubJs({ stdout: 'boom one\n', stderr: 'boom two\n' }));
+  const log = readFileSync(join(runDir(id), 'runner.log'), 'utf8');
+  assert.match(log, /--- run \d+ · stage 1 \(Spec\) · attempt 1 · exit 1/);
+  assert.match(log, /--- run \d+ · stage 1 \(Spec\) · attempt 3 · exit 1/); // 3 sessions, each attributed
+  assert.match(log, /\[stdout\]\nboom one/);
+  assert.match(log, /\[stderr\]\nboom two/);
+  assert.ok(!log.includes(PROMPT_FRAGMENT), 'the block must not carry the prompt');
+
+  // A clean run writes nothing extra (FR-025) — retention is failing attempts only.
+  const db = openDb();
+  const wt = makeRepoWithWorktree();
+  const okId = createRun(db, { slug: 'clean', repo: 'demo', repo_path: wt, worktree: wt,
+    branch: 'autodev/001-x', requirement: 'demo' });
+  db.close();
+  execFileSync(process.execPath, ['src/runner.js', String(okId)], { env: process.env });
+  const okLog = existsSync(join(runDir(okId), 'runner.log'))
+    ? readFileSync(join(runDir(okId), 'runner.log'), 'utf8') : '';
+  assert.doesNotMatch(okLog, /--- run \d+ · stage/);
+});
+
+test('a session larger than the old 1 MiB buffer no longer parks the run for the wrong reason', () => {
+  // 2 MiB on stdout, exit 0. Under the default maxBuffer this raised ENOBUFS and killed the
+  // child, parking the run on a failure that had nothing to do with the work.
+  // exit() inside the write callback: process.exit() discards a large pending stdout write,
+  // so a naive stub never actually delivers the megabytes it claims to.
+  const { run } = runWithStub(`process.stdout.write('z'.repeat(2*1024*1024), () => process.exit(0));`);
+  assert.equal(run.status, 'BLOCKED');            // no artifact, so stage 1 still fails its check
+  assert.match(run.blocked_reason, /specs\/NNN|spec artifact/); // …but for the RIGHT reason
+  assert.doesNotMatch(run.blocked_reason, /ENOBUFS|buffer/);
+});
+
+test('a runaway failing session produces a clamped block, not an unbounded one', () => {
+  const { id } = runWithStub(`process.stdout.write('z'.repeat(3*1024*1024), () => process.exit(1));`);
+  const log = readFileSync(join(runDir(id), 'runner.log'), 'utf8');
+  assert.match(log, /bytes elided/);
+  // Three attempts × 3 MiB unclamped would be ~9 MiB; each block is capped at 1 MiB per channel.
+  assert.ok(log.length < 4 * 1024 * 1024, `blocks must be clamped, log is ${log.length} bytes`);
+});
+
+for (const [label, stub, remedy] of [
+  ['not signed in', failingStubJs({ stdout: 'Not logged in · Please run /login\n' }), /sign in/],
+  ['usage exhausted', failingStubJs({ stdout: 'Claude usage limit reached\n' }), /reset|raise/],
+]) {
+  test(`terminal condition (${label}) parks after ONE session and names the remedy`, () => {
+    const record = join(mkdtempSync(join(tmpdir(), 'rec-')), 'sessions');
+    const withRecord = stub.replace('const p = String(process.argv[3] ?? \'\');',
+      `const p = String(process.argv[3] ?? ''); fs.appendFileSync(${JSON.stringify(record)}, '1\\n');`);
+    const { run } = runWithStub(withRecord);
+    assert.equal(run.status, 'BLOCKED');
+    assert.equal(sessionsFrom(record).length || readFileSync(record, 'utf8').trim().split('\n').length, 1,
+      'a terminal condition must cost exactly one session, not three');
+    assert.match(run.blocked_reason, remedy);
+  });
+}
+
+test('an unrecognised failure still gets the full retry budget — classification fails open', () => {
+  const record = join(mkdtempSync(join(tmpdir(), 'rec-')), 'sessions');
+  const { run } = runWithStub(failingStubJs({ stdout: 'TypeError: nope\n', recordTo: record }));
+  assert.equal(run.status, 'BLOCKED');
+  assert.equal(sessionsFrom(record).length, 3, 'unmatched failures keep the existing behaviour');
+});
+
+test('a SUCCESSFUL session whose output quotes a terminal phrase does not park the run', () => {
+  // The model reasoning about an auth error must never be mistaken for one (FR-012).
+  const quoting = pipelineStubJs().replace(
+    'const git =', 'process.stdout.write("I considered whether Not logged in applied here\\n");\nconst git =');
+  const { run } = runWithStub(quoting);
+  assert.equal(run.status, 'DONE');
+});
+
+test('resume carries the previous park reason into the resumed stage', () => {
+  const { id, wt } = runWithStub(failingStubJs({ stdout: 'WIDGET_FROBNICATOR_MISSING\n' }));
+  const record = join(mkdtempSync(join(tmpdir(), 'rec-')), 'sessions');
+  runWithStub(failingStubJs({ stdout: 'still broken\n', recordTo: record }), { resumeOf: id, worktree: wt });
+  const prompts = sessionsFrom(record).map(s => s.prompt);
+  assert.ok(prompts.length, 'the resumed stage ran at least one session');
+  assert.match(prompts[0], /A previous attempt failed its verification/);
+  assert.match(prompts[0], /WIDGET_FROBNICATOR_MISSING/);
+});
+
+test('resuming a run that never parked invents no previous failure', () => {
+  const db = openDb();
+  const wt = makeRepoWithWorktree();
+  const id = createRun(db, { slug: 'np', repo: 'demo', repo_path: wt, worktree: wt,
+    branch: 'autodev/001-x', requirement: 'demo' });
+  db.close();
+  const record = join(mkdtempSync(join(tmpdir(), 'rec-')), 'sessions');
+  runWithStub(failingStubJs({ stdout: 'fresh failure\n', recordTo: record }), { resumeOf: id, worktree: wt });
+  assert.doesNotMatch(sessionsFrom(record)[0].prompt, /A previous attempt failed/);
+});
+
+test('two consecutive resumes carry one reason, not two concatenated', () => {
+  const { id, wt } = runWithStub(failingStubJs({ stdout: 'FIRST_CAUSE\n' }));
+  runWithStub(failingStubJs({ stdout: 'SECOND_CAUSE\n' }), { resumeOf: id, worktree: wt });
+  const record = join(mkdtempSync(join(tmpdir(), 'rec-')), 'sessions');
+  runWithStub(failingStubJs({ stdout: 'third\n', recordTo: record }), { resumeOf: id, worktree: wt });
+  const p = sessionsFrom(record)[0].prompt;
+  assert.match(p, /SECOND_CAUSE/);
+  assert.doesNotMatch(p, /FIRST_CAUSE/, 'the seed must not accumulate across resumes');
 });
 
 test('.autodev.json "push": false caps the run at Verify', () => {
