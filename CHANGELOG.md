@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased
+
+The first-green-run release: everything here exists because the pipeline had
+never completed a run, and the one run it had recorded could not be diagnosed.
+
+### Fixed
+- **A parked run reported the stage prompt as its diagnosis.** `execFileSync`'s
+  message for a non-zero exit is `Command failed: <argv>`, and `argv[2]` is the
+  prompt — so the echo reached `blocked.md`, `blocked_reason`, both retry
+  events, `autodev status` and the dashboard at once, while the real cause
+  survived only inside the last-output block. The reason is now built from what
+  the session actually produced.
+- **Background processes were launched by asking `PATH` for `node`.** Where
+  `PATH` has none, or one older than the 22.5 that `node:sqlite` needs, the
+  detached runner died into `runner.log` and the run row stayed `RUNNING`
+  forever — no park, no event. Now `process.execPath` everywhere.
+- **`--spec` was discarded after kickoff.** Every stage re-resolved "the spec"
+  as the highest-numbered `specs/NNN-*`, so a repo with several specs had its
+  later stages work one the operator never chose — and report success for it.
+  Runs are now pinned to a `spec_dir`, resolved through a single function.
+- `maxBuffer` raised to 64 MiB. The 1 MiB default against a 45-minute session
+  under `--output-format json` killed the child with `SIGTERM` and parked the
+  run for a reason unrelated to the work.
+- Resume no longer discards what it learned: the park reason is read before it
+  is cleared, and seeded into the resumed stage's first attempt.
+
+### Added
+- Terminal-failure classification. A signed-out CLI, a missing binary, or an
+  exhausted usage allowance now parks on the **first** attempt with its remedy,
+  instead of buying the same impossible session three times. Classification
+  runs only on a session that failed, and anything unrecognised keeps the
+  existing retry budget — a rate limit is deliberately not in the set.
+- Failing sessions leave an attributed, size-capped block in the run's existing
+  `runner.log`. Successful sessions leave nothing: a run makes 10–25 sessions
+  and only the failing one gets read.
+
 ## v0.2.0 — 2026-07-22
 
 The cold-start hardening release: a stranger on a fresh machine (Linux, macOS,

@@ -249,15 +249,15 @@ and confirm every later stage operates on it.
 
 ## Phase 8: Polish & Cross-Cutting
 
-- [ ] T037 [P] Update the Troubleshooting table in `README.md`: the three terminal conditions and
+- [x] T037 [P] Update the Troubleshooting table in `README.md`: the three terminal conditions and
       what they now say, and a line stating that a failing session's output is retained in
       `runner.log`.
-- [ ] T038 [P] Add a `CHANGELOG.md` entry describing the park-reason fix, terminal classification,
+- [x] T038 [P] Add a `CHANGELOG.md` entry describing the park-reason fix, terminal classification,
       the interpreter fix, resume seeding, and spec pinning.
-- [ ] T039 Run `autodev selftest` — it must stay green. It is the canary for the exec path; a
+- [x] T039 Run `autodev selftest` — it must stay green. It is the canary for the exec path; a
       break here means `runClaude`'s **success** path changed when only its failure path should
       have.
-- [ ] T040 Walk [quickstart.md](./quickstart.md) end to end, including the manual SC-002
+- [x] T040 Walk [quickstart.md](./quickstart.md) end to end, including the manual SC-002
       read-through that no test can perform.
 - [ ] T041 **SC-008** — complete one real green run against a small real repository with
       `--no-push`. Record what happened. If it parks, the park reason is now the evidence, and it

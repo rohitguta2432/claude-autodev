@@ -90,6 +90,16 @@ green, or a `BLOCKED` status with a diagnosis in
 | `review verdict: REQUEST_CHANGES` after 3 rounds | the review⇄fix loop spent its budget; read `.autodev/review.json` in the worktree, fix or relax, then `autodev resume <id>` |
 | `cost budget exceeded: $… >= maxCostUsd` | raise `maxCostUsd` in `.autodev.json` and `autodev resume <id>` |
 | `no TTY to confirm on — run autodev once interactively` | the skip-permissions consent hasn't been recorded; run any `autodev run` from a terminal once |
+| `the claude CLI is installed but not signed in` (parks at stage 1, after **one** session) | `claude --version` passes while logged out, so `doctor` can't catch this; run `claude` once interactively, then `autodev resume <id>` |
+| `the claude CLI could not be launched` | `claude` isn't on `PATH`; install it or point `AUTODEV_CLAUDE_BIN` at it |
+| `the Claude usage allowance for this account is exhausted` | wait for the reset (or raise the limit), then `autodev resume <id>` |
+
+A parked run's reason names what failed and how to fix it. When one line isn't
+enough, `~/.autodev/runs/<id>/runner.log` holds the failing session's own
+output, attributed by stage and attempt — successful sessions are not recorded.
+These three conditions cannot succeed on retry, so they park immediately rather
+than spending three sessions to prove it; everything else keeps the normal
+retry budget.
 
 ## Configuration
 
