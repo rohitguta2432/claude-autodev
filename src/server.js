@@ -114,7 +114,7 @@ export async function startServer({ port = PORT(), dbPath } = {}) {
         updateRun(db, run.id, { stage, status: 'RUNNING', blocked_reason: null });
         mkdirSync(runDir(run.id), { recursive: true });
         const log = openSync(join(runDir(run.id), 'runner.log'), 'a');
-        spawn('node', [join(dirname(fileURLToPath(import.meta.url)), 'runner.js'), String(run.id), '--resume'],
+        spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), 'runner.js'), String(run.id), '--resume'],
           { detached: true, stdio: ['ignore', log, log], env: process.env }).unref();
         return json(200, { ok: true, stage });
       }
@@ -147,7 +147,7 @@ export async function startServer({ port = PORT(), dbPath } = {}) {
         for (const c of clients) c.write(`data: ${JSON.stringify(ev)}\n\n`);
         if (fields.status === 'RUNNING') { // resumed past the skipped current stage — relaunch the runner
           const log = openSync(join(runDir(run.id), 'runner.log'), 'a');
-          spawn('node', [join(dirname(fileURLToPath(import.meta.url)), 'runner.js'), String(run.id), '--resume'],
+          spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), 'runner.js'), String(run.id), '--resume'],
             { detached: true, stdio: ['ignore', log, log], env: process.env }).unref();
         }
         return json(200, { ok: true, skipped: fields.skipped, stage: fields.stage ?? run.stage });

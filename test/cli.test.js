@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, openSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, readdirSync, mkdirSync, openSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, basename } from 'node:path';
+import { join, basename, delimiter } from 'node:path';
 import { execSync, execFileSync, spawn } from 'node:child_process';
 import { git, commit, stubClaude } from './helpers.js';
 
@@ -216,6 +216,51 @@ test('a failed worktree add rolls the reserved row back — no ghost run', () =>
   const db2 = openDb();
   assert.equal(listRuns(db2).length, before, 'reserved row must not survive a failed kickoff');
   db2.close();
+});
+
+test('no launch site spawns a bare "node" — the interpreter must come from process.execPath', () => {
+  // The regression this guards is silent: a PATH 'node' that is missing or older than 22.5
+  // (node:sqlite) dies immediately into runner.log, and the run row says RUNNING forever.
+  // Structural assertion, because there is no failure to observe.
+  const offenders = [];
+  for (const dir of ['src', 'bin']) {
+    for (const f of readdirSync(dir).filter(f => f.endsWith('.js'))) {
+      const body = readFileSync(join(dir, f), 'utf8');
+      body.split('\n').forEach((line, i) => {
+        if (/spawn(Sync)?\(\s*['"]node['"]/.test(line)) offenders.push(`${dir}/${f}:${i + 1}`);
+      });
+    }
+  }
+  assert.deepEqual(offenders, [], `spawn a bare "node" at: ${offenders.join(', ')}`);
+});
+
+test('the runner still starts when PATH offers no usable node', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'repo-nopath-'));
+  git(repo, ['init', '-q', '-b', 'main'], commit('init', '--allow-empty'));
+  const db = openDb();
+  const id = createRun(db, { slug: 'nopath', repo: 'demo', repo_path: repo, worktree: repo,
+    branch: 'main', requirement: 'q' });
+  db.close();
+  mkdirSync(runDir(id), { recursive: true });
+
+  // A shim dir whose `node` always fails, prepended to PATH. Bare-'node' spawning picks this
+  // up and dies; process.execPath ignores PATH entirely. git stays reachable via the real PATH.
+  const shim = mkdtempSync(join(tmpdir(), 'shim-'));
+  if (process.platform === 'win32') {
+    writeFileSync(join(shim, 'node.cmd'), '@exit /b 127\r\n');
+  } else {
+    writeFileSync(join(shim, 'node'), '#!/bin/sh\nexit 127\n', { mode: 0o755 });
+  }
+  const env = { ...process.env, PATH: shim + delimiter + process.env.PATH };
+
+  execFileSync(process.execPath, ['bin/autodev.js', 'resume', String(id)], { encoding: 'utf8', env });
+
+  // The stub claude produces no artifact, so stage 1 fails its check and the run parks — but
+  // parking is proof the runner executed at all, which is the whole point.
+  await waitFor(() => {
+    try { return /stage_started/.test(readFileSync(join(runDir(id), 'events.jsonl'), 'utf8')); }
+    catch { return null; }
+  }, 20000);
 });
 
 test('.autodev.json branchPrefix names the run branch', () => {

@@ -24,7 +24,10 @@ async function ensureServer() {
   try { await fetch(`${base()}/api/runs`, { signal: AbortSignal.timeout(1000) }); return; }
   catch {
     const log = openSync(join(process.env.AUTODEV_HOME || join(homedir(), '.autodev'), 'server.log'), 'a');
-    spawn('node', [join(ROOT, 'src/server.js')], { detached: true, stdio: ['ignore', log, log] }).unref();
+    // process.execPath, never a bare 'node': autodev needs >=22.5 for node:sqlite, and the
+    // interpreter already running us is the only one known to satisfy that. A PATH 'node' that
+    // is missing or too old dies into the log and leaves the run RUNNING forever.
+    spawn(process.execPath, [join(ROOT, 'src/server.js')], { detached: true, stdio: ['ignore', log, log] }).unref();
   }
 }
 
@@ -58,7 +61,7 @@ repos and requirements you'd trust an unsupervised agent with.`;
 
 function spawnRunner(id, extra = []) {
   const log = openSync(join(runDir(id), 'runner.log'), 'a');
-  spawn('node', [join(ROOT, 'src/runner.js'), String(id), ...extra],
+  spawn(process.execPath, [join(ROOT, 'src/runner.js'), String(id), ...extra],
     { detached: true, stdio: ['ignore', log, log], env: process.env }).unref();
 }
 
