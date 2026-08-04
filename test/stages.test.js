@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { STAGES, findSpecDir, detectTestCmd, specDirFor, isCompleteSpecDir } from '../src/stages.js';
+import { STAGES, findSpecDir, specDirOf, detectTestCmd, specDirFor, isCompleteSpecDir } from '../src/stages.js';
 import { git, commit } from './helpers.js';
 
 function gitRepo() {
@@ -22,6 +22,45 @@ test('findSpecDir picks newest specs/NNN-*', () => {
   mkdirSync(join(wt, 'specs/001-old'), { recursive: true });
   mkdirSync(join(wt, 'specs/002-new'), { recursive: true });
   assert.match(findSpecDir(wt), /002-new$/);
+});
+
+test('specDirOf prefers the run\'s pinned directory over the highest-numbered one', () => {
+  const wt = gitRepo();
+  for (const n of ['001-chosen', '002-other', '015-newest']) mkdirSync(join(wt, 'specs', n), { recursive: true });
+  assert.match(specDirOf({ worktree: wt, spec_dir: 'specs/001-chosen' }), /001-chosen$/);
+  assert.match(specDirOf({ worktree: wt }), /015-newest$/, 'unpinned keeps the old behaviour');
+});
+
+test('specDirOf falls back rather than failing when the pin is not in this worktree', () => {
+  const wt = gitRepo();
+  mkdirSync(join(wt, 'specs/003-present'), { recursive: true });
+  // deleted, renamed, or recorded against a different worktree — never a reason to park
+  assert.match(specDirOf({ worktree: wt, spec_dir: 'specs/099-vanished' }), /003-present$/);
+  // …and a pin pointing at a file rather than a directory is equally not a directory
+  writeFileSync(join(wt, 'specs/notadir'), 'x');
+  assert.match(specDirOf({ worktree: wt, spec_dir: 'specs/notadir' }), /003-present$/);
+  assert.equal(specDirOf({ worktree: gitRepo(), spec_dir: 'specs/099-vanished' }), null);
+});
+
+test('stage checks and prompts both follow the pin — they cannot disagree', () => {
+  const wt = gitRepo();
+  const body = '# doc\ncontent......................\n';
+  for (const n of ['001-chosen', '015-newest']) {
+    mkdirSync(join(wt, 'specs', n, 'checklists'), { recursive: true });
+    for (const f of ['spec.md', 'plan.md']) writeFileSync(join(wt, 'specs', n, f), body);
+  }
+  // Only the PINNED spec has an unchecked task; the newest is complete.
+  writeFileSync(join(wt, 'specs/001-chosen/tasks.md'), '- [ ] T001 unfinished\n');
+  writeFileSync(join(wt, 'specs/015-newest/tasks.md'), '- [x] T001 done\n');
+  const run = { worktree: wt, spec_dir: 'specs/001-chosen' };
+
+  const implement = STAGES.find(s => s.key === 'implement');
+  assert.throws(() => implement.check(run), /T001/, 'the check must read the pinned tasks.md');
+  for (const key of ['analyze', 'implement', 'verify']) {
+    const p = STAGES.find(s => s.key === key).prompt(run);
+    assert.match(p, /specs\/001-chosen/, `stage ${key} prompt must name the pinned spec`);
+    assert.doesNotMatch(p, /the newest specs/, `stage ${key} prompt must not say "newest" when pinned`);
+  }
 });
 
 test('spec check requires non-empty spec/plan/tasks', () => {

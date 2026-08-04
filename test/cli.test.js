@@ -53,6 +53,29 @@ test('autodev run auto-adopts a matching complete spec and starts at stage 2', (
   const run = listRuns(db)[0];
   db.close();
   assert.equal(run.stage, 2);
+  // Persisted, not merely printed: every stage resolves the spec through this column, and
+  // without it each one re-picks the highest-numbered directory instead.
+  assert.equal(run.spec_dir, 'specs/001-rate-limit');
+});
+
+test('autodev run --spec persists the chosen directory, repo-relative and POSIX-form', () => {
+  const repo = repoWithCompleteSpec();
+  execFileSync('node', ['bin/autodev.js', 'run', 'unrelated words entirely', '--repo', repo,
+    '--no-spawn', '--spec', 'specs/001-rate-limit'], { encoding: 'utf8' });
+  const db = openDb();
+  const run = listRuns(db)[0]; db.close();
+  assert.equal(run.spec_dir, 'specs/001-rate-limit');
+  assert.doesNotMatch(run.spec_dir, /\\/, 'stored POSIX-form even on win32 — it is a repo path');
+  assert.ok(!run.spec_dir.startsWith('/') && !/^[A-Za-z]:/.test(run.spec_dir), 'never absolute');
+});
+
+test('a run that adopts nothing leaves spec_dir null until its stage 1 creates one', () => {
+  const repo = repoWithCompleteSpec();
+  execFileSync('node', ['bin/autodev.js', 'run', 'build an unrelated dashboard widget', '--repo', repo, '--no-spawn'], { encoding: 'utf8' });
+  const db = openDb();
+  const run = listRuns(db)[0]; db.close();
+  assert.equal(run.spec_dir, null);
+  assert.equal(run.stage, 1);
 });
 
 test('autodev run leaves stage 1 and prints nothing extra when requirement does not match any spec', () => {

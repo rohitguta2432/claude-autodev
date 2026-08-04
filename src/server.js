@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb, createRun, getRun, listRuns, updateRun, runDir, PORT, skippedSet } from './db.js';
-import { findSpecDir, STAGES } from './stages.js';
+import { specDirOf, STAGES } from './stages.js';
 
 const PUB = join(dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
@@ -32,7 +32,7 @@ function lastEvents(id, limit = 200) {
 // Task ticks for the dashboard's Tasks pane — parsed live from tasks.md, no separate event needed.
 function tasksFor(run) {
   try {
-    const dir = findSpecDir(run.worktree);
+    const dir = specDirOf(run); // the run's own spec, not whichever is highest-numbered
     if (!dir) return [];
     const lines = readFileSync(join(dir, 'tasks.md'), 'utf8').split('\n');
     const tasks = [];

@@ -2,11 +2,18 @@ import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
 
-export function findSpecDir(worktree) {
+// Every specs/NNN-* directory name in a worktree, sorted. Exported because "highest-numbered"
+// is NOT the same question as "which one did this session just create" — a repo can already
+// hold specs numbered above the one stage 1 writes.
+export function specDirs(worktree) {
   const root = join(worktree, 'specs');
-  if (!existsSync(root)) return null;
-  const dirs = readdirSync(root).filter(d => /^\d{3}-/.test(d) && statSync(join(root, d)).isDirectory()).sort();
-  return dirs.length ? join(root, dirs.at(-1)) : null;
+  if (!existsSync(root)) return [];
+  return readdirSync(root).filter(d => /^\d{3}-/.test(d) && statSync(join(root, d)).isDirectory()).sort();
+}
+
+export function findSpecDir(worktree) {
+  const dirs = specDirs(worktree);
+  return dirs.length ? join(worktree, 'specs', dirs.at(-1)) : null;
 }
 
 export function isCompleteSpecDir(dir) {
@@ -73,8 +80,26 @@ export function detectTestCmd(dir) {
 
 const git = (wt, cmd) => execSync(`git ${cmd}`, { cwd: wt, encoding: 'utf8' });
 const need = (cond, msg) => { if (!cond) throw new Error(msg); };
+
+// The spec directory THIS run owns — the single resolver every consumer must use.
+// Without the pin each stage independently re-picked the highest-numbered specs/NNN-*, so a
+// repo holding several specs had its later stages silently work one the operator never chose.
+// Falls back when the run predates spec_dir or its directory is absent from this worktree:
+// a pointer must never be the reason a run parks (FR-023).
+export function specDirOf(run) {
+  if (run?.spec_dir) {
+    const p = join(run.worktree, run.spec_dir);
+    if (existsSync(p) && statSync(p).isDirectory()) return p;
+  }
+  return run?.worktree ? findSpecDir(run.worktree) : null;
+}
+
+// Name the pinned directory in the prompt too — otherwise the session is told to find "the
+// newest" one while its check reads the pinned one, and they can disagree (FR-022).
+const specRef = (run) => run.spec_dir ? `the spec set at ${run.spec_dir}/` : 'the newest specs/NNN-* folder';
+
 const specFile = (run, f) => {
-  const d = findSpecDir(run.worktree);
+  const d = specDirOf(run);
   need(d, 'no specs/NNN-* directory found');
   return join(d, f);
 };
@@ -103,9 +128,9 @@ export const STAGES = [
   },
   {
     n: 2, key: 'analyze', title: 'Analyze', skill: null, // checklist gate — no skill
-    prompt: (run) => `Open the newest specs/NNN-* folder. Work through every checklist under its checklists/ directory: verify each item against spec.md, plan.md and tasks.md, fix the documents where they fall short, and tick each checklist item (- [x]) once satisfied. Do not leave any gating item unchecked.`,
+    prompt: (run) => `Open ${specRef(run)}. Work through every checklist under its checklists/ directory: verify each item against spec.md, plan.md and tasks.md, fix the documents where they fall short, and tick each checklist item (- [x]) once satisfied. Do not leave any gating item unchecked.`,
     check: (run) => {
-      const dir = join(findSpecDir(run.worktree) ?? '', 'checklists');
+      const dir = join(specDirOf(run) ?? '', 'checklists');
       if (!existsSync(dir)) return; // no checklists → nothing gates
       for (const f of readdirSync(dir)) {
         need(!/^- \[ \]/m.test(readFileSync(join(dir, f), 'utf8')), `unchecked items remain in checklists/${f}`);
@@ -114,7 +139,7 @@ export const STAGES = [
   },
   {
     n: 3, key: 'implement', title: 'Implement', skill: 'executing-plans',
-    prompt: (run) => `Use the executing-plans skill if it is installed; otherwise implement the newest specs/NNN-*/tasks.md in this repository yourself, task by task, test-driven, committing after each task and ticking each task checkbox (- [x] T###) in tasks.md as you complete it. All tests must pass before you finish.`,
+    prompt: (run) => `Use the executing-plans skill if it is installed; otherwise implement tasks.md from ${specRef(run)} in this repository yourself, task by task, test-driven, committing after each task and ticking each task checkbox (- [x] T###) in tasks.md as you complete it. All tests must pass before you finish.`,
     check: (run) => {
       const tasks = readFileSync(specFile(run, 'tasks.md'), 'utf8');
       const un = tasks.match(/^- \[ \] \**(T\d+)/m);
@@ -124,7 +149,7 @@ export const STAGES = [
   },
   {
     n: 4, key: 'verify', title: 'Verify', skill: 'speckit-verify',
-    prompt: (run) => `Run a post-implementation verification gate on the newest specs/NNN-* feature. Follow .specify/extensions/verify/commands/verify.md (the /speckit.verify.run command) if it exists in this repo; otherwise verify yourself against spec.md, plan.md, tasks.md and the constitution (if present): (A) task truthfulness — every ticked task's referenced files exist and contain the claimed change; (B) requirement coverage — each functional requirement has implementation evidence in code; (C) scenario/test coverage — acceptance scenarios and edge cases map to real tests; (D) spec intent — behaviour matches acceptance criteria, including spec revisions made after implementation started. If you find fixable gaps: append new unchecked checkbox tasks to tasks.md (never edit or delete existing entries), implement them, tick them, keep tests green, and commit. Then write your final verdict as JSON to .autodev/verify.json in the repo root: {"verdict":"PASS"|"FAIL","findings":[{"id":"C1","category":"...","severity":"CRITICAL"|"HIGH"|"MEDIUM"|"LOW","summary":"..."}]}. PASS only if no CRITICAL or HIGH findings remain.`,
+    prompt: (run) => `Run a post-implementation verification gate on ${specRef(run)}. Follow .specify/extensions/verify/commands/verify.md (the /speckit.verify.run command) if it exists in this repo; otherwise verify yourself against spec.md, plan.md, tasks.md and the constitution (if present): (A) task truthfulness — every ticked task's referenced files exist and contain the claimed change; (B) requirement coverage — each functional requirement has implementation evidence in code; (C) scenario/test coverage — acceptance scenarios and edge cases map to real tests; (D) spec intent — behaviour matches acceptance criteria, including spec revisions made after implementation started. If you find fixable gaps: append new unchecked checkbox tasks to tasks.md (never edit or delete existing entries), implement them, tick them, keep tests green, and commit. Then write your final verdict as JSON to .autodev/verify.json in the repo root: {"verdict":"PASS"|"FAIL","findings":[{"id":"C1","category":"...","severity":"CRITICAL"|"HIGH"|"MEDIUM"|"LOW","summary":"..."}]}. PASS only if no CRITICAL or HIGH findings remain.`,
     check: (run) => {
       const p = join(run.worktree, '.autodev/verify.json');
       need(existsSync(p), 'verify.json not written by verify session');

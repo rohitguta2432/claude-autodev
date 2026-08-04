@@ -141,7 +141,10 @@ if (cmd === 'run') {
   // 004, whose branch/worktree already exist). Naming from the inserted id also keeps the
   // NNN in autodev/NNN-slug equal to the run id the dashboard and `autodev status` show.
   const id = createRun(db, { slug, repo, repo_path: repoPath, worktree: '', branch: '', requirement,
-    jira_key: jiraKey, issue_type: issueType, test_cmd: testCmd, until_stage: until, stage: adoptedSpec ? 2 : 1 });
+    jira_key: jiraKey, issue_type: issueType, test_cmd: testCmd, until_stage: until,
+    // Persist the adoption, don't just print it: every stage resolves the spec through this,
+    // and without it they each re-pick the highest-numbered directory instead (FR-019).
+    spec_dir: adoptedSpec, stage: adoptedSpec ? 2 : 1 });
   const nnn = String(id).padStart(3, '0');
   const branch = branchArg || `${repoConfig(repoPath).branchPrefix || 'autodev'}/${nnn}-${slug}`;
   const wtRoot = process.env.AUTODEV_WORKTREES || join(homedir(), 'worktrees');

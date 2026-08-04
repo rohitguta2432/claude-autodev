@@ -1,10 +1,10 @@
 import { execFileSync, execSync } from 'node:child_process';
 import { writeFileSync, appendFileSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb, getRun, updateRun, runDir, PORT, skippedSet } from './db.js';
 import { emit } from './events.js';
-import { STAGES, stageN, detectTestCmd } from './stages.js';
+import { STAGES, stageN, detectTestCmd, findSpecDir, specDirs } from './stages.js';
 import { repoConfig, modelFor } from './config.js';
 import { parseClaudeResult } from './metrics.js';
 import { causeLine, classify, sessionBlock } from './session.js';
@@ -173,6 +173,8 @@ if (resume) { saveState({ status: 'RUNNING', blocked_reason: null }); await ev({
 saveState({ pid: process.pid });
 
 const skipped = skippedSet(run); // stages the user skipped from the dashboard — bypassed here too
+// Snapshot taken before any stage runs, so the spec stage's creation can be identified by diff.
+const specsBefore = new Set(specDirs(run.worktree));
 // Hard stop after stage N — change-controlled repos can forbid autonomous push/PR
 // outright. Precedence: --until (run row) > .autodev.json "until" > "push": false.
 const until = run.until_stage || stageN(cfg.until) || (cfg.push === false ? stageN('verify') : null) || STAGES.length;
@@ -206,6 +208,21 @@ for (const stage of STAGES.filter(s => s.n >= run.stage && s.n <= until && !skip
     }
   }
   if (!ok) await park(stage, lastErr, lastOut);
+  // Pin the spec the moment stage 1 has produced one, so stages 2-4 target the directory THIS
+  // run owns rather than re-picking the highest-numbered one — which, in a repo whose specs/
+  // grows underneath a long run, may belong to somebody else's run entirely (FR-020).
+  // Recorded from what the runner observes on disk, never from what the session claims.
+  // "Highest-numbered" is the wrong question here: a repo can already hold specs above the one
+  // stage 1 writes. Diff the directory listing instead, and fall back to highest only when the
+  // diff is not a single unambiguous addition.
+  if (stage.key === 'spec' && !run.spec_dir) {
+    const added = specDirs(run.worktree).filter(d => !specsBefore.has(d));
+    const d = added.length === 1 ? join(run.worktree, 'specs', added[0]) : findSpecDir(run.worktree);
+    if (d) {
+      run.spec_dir = relative(run.worktree, d).replaceAll('\\', '/'); // repo-relative, POSIX
+      saveState({ spec_dir: run.spec_dir });
+    }
+  }
   if (stage.key === 'push' && existsSync(join(run.worktree, '.autodev/pr-url'))) {
     const url = readFileSync(join(run.worktree, '.autodev/pr-url'), 'utf8').trim();
     saveState({ pr_url: url }); await ev({ type: 'pr_opened', stage: stage.n, detail: url });

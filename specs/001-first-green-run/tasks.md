@@ -211,36 +211,36 @@ and confirm every later stage operates on it.
 
 ### Tests for User Story 5
 
-- [ ] T026 [P] [US5] `test/db.test.js`: `spec_dir` round-trips; a database created without the
+- [x] T026 [P] [US5] `test/db.test.js`: `spec_dir` round-trips; a database created without the
       column opens, migrates, and reads unchanged.
-- [ ] T027 [P] [US5] `test/stages.test.js`: the resolver returns the pinned directory when it
+- [x] T027 [P] [US5] `test/stages.test.js`: the resolver returns the pinned directory when it
       exists; falls back to highest-numbered when `spec_dir` is `NULL`; falls back — rather than
       throwing or parking — when the pinned directory is absent from the worktree (FR-023).
-- [ ] T028 [P] [US5] `test/cli.test.js`: an explicitly chosen spec and an automatically matched
+- [x] T028 [P] [US5] `test/cli.test.js`: an explicitly chosen spec and an automatically matched
       spec both persist `spec_dir`; the stored value is repo-relative and POSIX-form on every
       platform.
-- [ ] T029 [P] [US5] `test/runner.test.js`: using `repoWithSpecs`, a run adopting `001` has
+- [x] T029 [P] [US5] `test/runner.test.js`: using `repoWithSpecs`, a run adopting `001` has
       stages 2–4 read `001` and not the highest-numbered directory; a fresh run records what its
       stage 1 created.
 
 ### Implementation for User Story 5
 
-- [ ] T030 [US5] Add `spec_dir TEXT` to `src/db.js` — the `CREATE TABLE` statement, the
+- [x] T030 [US5] Add `spec_dir TEXT` to `src/db.js` — the `CREATE TABLE` statement, the
       `ALTER TABLE … ADD COLUMN` migration loop, and `createRun`'s column and value lists.
-- [ ] T031 [US5] Add the shared resolver to `src/stages.js` implementing the resolution contract
+- [x] T031 [US5] Add the shared resolver to `src/stages.js` implementing the resolution contract
       in [contracts/run-record.md](./contracts/run-record.md), including the mandatory fallback.
       Export it.
-- [ ] T032 [US5] Switch `specFile` and the stage 1–4 checks in `src/stages.js` to the resolver.
+- [x] T032 [US5] Switch `specFile` and the stage 1–4 checks in `src/stages.js` to the resolver.
       No consumer may re-implement it.
-- [ ] T033 [US5] Change the stage 2, 3 and 4 prompts in `src/stages.js` to name the resolved
+- [x] T033 [US5] Change the stage 2, 3 and 4 prompts in `src/stages.js` to name the resolved
       directory instead of instructing the session to find "the newest" one (FR-022) — otherwise
       the session and the check that grades it can disagree.
-- [ ] T034 [US5] In `bin/autodev.js`, pass the already-computed adopted spec path into
+- [x] T034 [US5] In `bin/autodev.js`, pass the already-computed adopted spec path into
       `createRun` so it is persisted rather than only printed.
-- [ ] T035 [US5] In `src/runner.js`, after stage 1's check passes and only when the column is
+- [x] T035 [US5] In `src/runner.js`, after stage 1's check passes and only when the column is
       still `NULL`, record the directory that stage created — resolved from the worktree by the
       runner, never reported by the session.
-- [ ] T036 [P] [US5] Switch `tasksFor` in `src/server.js` to the shared resolver so the
+- [x] T036 [P] [US5] Switch `tasksFor` in `src/server.js` to the shared resolver so the
       dashboard's task pane shows the run's own spec.
 
 **Checkpoint**: all five stories independently functional.

@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { git, commit, stubClaude, pipelineStubJs, failingStubJs, sessionsFrom } from './helpers.js';
+import { git, commit, stubClaude, pipelineStubJs, failingStubJs, sessionsFrom, repoWithSpecs } from './helpers.js';
 
 process.env.AUTODEV_HOME = mkdtempSync(join(tmpdir(), 'autodev-run-'));
 const { openDb, createRun, getRun, runDir } = await import('../src/db.js');
@@ -278,6 +278,48 @@ test('two consecutive resumes carry one reason, not two concatenated', () => {
   const p = sessionsFrom(record)[0].prompt;
   assert.match(p, /SECOND_CAUSE/);
   assert.doesNotMatch(p, /FIRST_CAUSE/, 'the seed must not accumulate across resumes');
+});
+
+// ---- spec pinning (US5) ----
+
+test('a fresh run pins the spec its own stage 1 created, not the highest-numbered one', () => {
+  // The repo already holds specs numbered ABOVE the one the stub writes (specs/001-x), so
+  // "highest-numbered wins" would pin somebody else's spec.
+  const wt = makeRepoWithWorktree();
+  repoWithSpecs(wt, ['015-existing', '020-existing']);
+  const db = openDb();
+  const id = createRun(db, { slug: 'pin', repo: 'demo', repo_path: wt, worktree: wt,
+    branch: 'autodev/001-x', requirement: 'demo' });
+  db.close();
+  execFileSync(process.execPath, ['src/runner.js', String(id)], { env: process.env });
+  const db2 = openDb();
+  const run = getRun(db2, id); db2.close();
+  assert.equal(run.spec_dir, 'specs/001-x', `pinned ${run.spec_dir}, expected the one stage 1 created`);
+});
+
+test('an adopted spec survives into every later stage, and is named in their prompts', () => {
+  const wt = makeRepoWithWorktree();
+  repoWithSpecs(wt, ['004-chosen', '015-decoy']);
+  const record = join(mkdtempSync(join(tmpdir(), 'rec-')), 'sessions');
+  const dir = mkdtempSync(join(tmpdir(), 'stub-pin-'));
+  // Record every prompt, then behave like the normal pipeline stub.
+  const bin = stubClaude(dir, `require('node:fs').appendFileSync(${JSON.stringify(record)}, JSON.stringify({ prompt: String(process.argv[3] ?? '') }) + '\\n');\n`
+    + pipelineStubJs());
+  const db = openDb();
+  const id = createRun(db, { slug: 'adopt', repo: 'demo', repo_path: wt, worktree: wt,
+    branch: 'autodev/001-x', requirement: 'demo', stage: 2, spec_dir: 'specs/004-chosen' });
+  db.close();
+  execFileSync(process.execPath, ['src/runner.js', String(id)], { env: { ...process.env, AUTODEV_CLAUDE_BIN: bin } });
+
+  const prompts = sessionsFrom(record).map(s => s.prompt);
+  const specMentions = prompts.filter(p => /specs\/00\d|specs\/01\d|newest specs/.test(p));
+  assert.ok(specMentions.length >= 2, 'the analyze/implement/verify prompts name a spec');
+  for (const p of specMentions) {
+    assert.match(p, /specs\/004-chosen/);
+    assert.doesNotMatch(p, /015-decoy|the newest specs/);
+  }
+  const db2 = openDb();
+  assert.equal(getRun(db2, id).spec_dir, 'specs/004-chosen', 'the pin is never overwritten'); db2.close();
 });
 
 test('.autodev.json "push": false caps the run at Verify', () => {
