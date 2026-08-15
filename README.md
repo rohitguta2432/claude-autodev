@@ -2,8 +2,8 @@
 
 [![CI](https://github.com/rohitguta2432/claude-autodev/actions/workflows/ci.yml/badge.svg)](https://github.com/rohitguta2432/claude-autodev/actions/workflows/ci.yml)
 
-Requirement in → reviewed, tested PR out. An autonomous 7-stage dev pipeline
-for Claude Code with a live mission-control dashboard.
+Issue in → reviewed, tested, deployed software out. An autonomous 8-stage dev
+pipeline for Claude Code with a live mission-control dashboard.
 
 Supported platforms: Linux, macOS, and Windows — the test suite runs on all
 three (Node 22 and 24) in CI on every push.
@@ -15,6 +15,10 @@ spec, plan, implementation, verify, push, review, test — in an isolated git wo
 retrying and self-fixing along the way, and parks itself with a diagnosis
 when it truly gets stuck. You watch (or don't) on a dashboard; you get a PR.
 
+Point `autodev daemon` at the repo's issue tracker and it stops needing you at
+all: issues become runs, runs become merged and deployed code, and the labels on
+each issue are the queue.
+
 ## How it works
 
 Each stage runs a headless Claude Code session and only advances once it
@@ -22,13 +26,18 @@ produces the artifact the next stage needs — no artifact, no advance.
 
 | # | Stage | Gate (artifact check) |
 |---|-------|------------------------|
-| 1 | Spec | `specs/NNN-slug/{spec,plan,tasks}.md` all non-empty |
+| 1 | Spec | `specs/NNN-slug/{spec,plan,tasks}.md` all non-empty (or a `REJECT` verdict — see [Mission](#mission-and-factory-rules)) |
 | 2 | Analyze | every `- [ ]` in `checklists/*.md` ticked |
 | 3 | Implement | every task in `tasks.md` ticked, worktree clean (committed) |
 | 4 | Verify | `.autodev/verify.json` verdict is `PASS` (no critical/high findings) |
 | 5 | Push | branch has an upstream remote (opens the PR with `gh pr create`) |
 | 6 | Review | `.autodev/review.json` verdict is `APPROVE` (loops fix ⇄ re-review) |
-| 7 | Test | the repo's own test command exits 0 (auto-detected, or fixed and retried) |
+| 7 | Test | the repo's own test command exits 0, **and** the holdout scenarios pass |
+| 8 | Deploy | the merge and the deploy command both succeed — **opt-in**, see [Deploy](#deploy) |
+
+Nothing in the pipeline shares context between stages: every one is a fresh
+`claude -p` session. The reviewer has never seen the plan, and the builder has
+never seen the acceptance criteria.
 
 A runner process drives one run through all seven stages, retrying a failed
 stage a bounded number of times before parking it `BLOCKED` with a diagnosis
@@ -50,7 +59,10 @@ autodev install-skill   # optional: packaged skills into ~/.claude/skills/ (--pr
 ```
 
 ```bash
+autodev init            # scaffold .autodev/{mission,factory-rules}.md in the target repo
 autodev run "add rate limiting to the API" --repo .
+autodev run --issue 42 --repo .          # requirement from a GitHub issue
+autodev daemon --repo . --interval 30    # pull work from the issue tracker, forever
 autodev status
 autodev cost <id>       # per-stage sessions / tokens / $
 autodev resume <id>     # after fixing whatever parked it BLOCKED
@@ -80,6 +92,87 @@ The run advances Spec → Analyze → Implement → Verify → Push (draft PR) �
 Review → Test on its own; you get a PR marked ready once review and tests are
 green, or a `BLOCKED` status with a diagnosis in
 `~/.autodev/runs/1/blocked.md` if it truly gets stuck.
+
+## Mission and factory rules
+
+`autodev init` scaffolds two optional files in the **target** repo. Both are absent
+by default and the pipeline behaves exactly as it did without them.
+
+`.autodev/mission.md` — goals and non-goals. Its only job is to let the spec stage
+say **no**: a requirement that hits a non-goal is written up as
+`{"verdict":"REJECT"}`, the run ends `REJECTED` before any code exists, and the
+reason lands in `~/.autodev/runs/<id>/blocked.md`. Without this file nothing is
+ever out of scope, and the factory can only ever obey you.
+
+`.autodev/factory-rules.md` — constraints that bind **only** unsupervised work, and
+are prepended to every session in the run. Keep them stricter than your
+`CLAUDE.md`: that one governs work a human is watching, this one governs work
+nobody is watching. The test for which file a rule belongs in is whether you would
+still want it when you are sitting there.
+
+## Holdout scenarios
+
+The stage-7 test suite is written by the builder, so passing it proves the builder
+agrees with itself. The holdout suite is not.
+
+At stage 1 the spec session also writes `.autodev/holdout/scenarios.md` —
+end-to-end acceptance scenarios in operator language, no implementation detail. The
+moment the spec gate passes, the runner **moves that directory out of the worktree**
+into `~/.autodev/runs/<id>/holdout/` and adds it to `.git/info/exclude`, so it is
+absent from both the working tree and the history for every session that follows.
+It comes back for exactly one session — the acceptance check at the end of stage 7 —
+and is removed again before any fix session runs. A failing scenario is fed back to
+the builder as *what was observed*, never as the scenario itself, so it cannot
+special-case its way to green.
+
+If the spec session writes no scenarios the stage is skipped and logged; the run
+still completes. Once scenarios exist, a `FAIL` verdict parks the run even with a
+green test suite.
+
+## The queue
+
+`autodev daemon --repo <path>` turns a pipeline into a factory. One tick, in
+priority order:
+
+1. **reconcile** — every issue whose run has finished gets its label and a comment:
+   `autodev:shipped` (closed), `autodev:rejected` (closed, with the mission's reason),
+   or `autodev:blocked` (left open, with the resume command).
+2. **dispatch** — start runs for `autodev:accepted` issues, oldest first, up to
+   `--max-parallel` (default 2). Concurrency is counted from the run registry, not
+   from the daemon's memory, so restarting it mid-tick cannot double-start work.
+3. **accept** — with `--auto-accept`, label untriaged issues so step 2 can pick them
+   up next tick. **Off by default**: on a public repo it would let any stranger's
+   issue start an autonomous build.
+
+Scope judgement is deliberately *not* the daemon's job — it belongs to the spec
+stage reading `mission.md`, the only place in the system that knows what the repo
+is for. The daemon just relays the verdict back to the issue.
+
+State lives in exactly two durable places: the issue's labels and the `issue_ref`
+column on the run. Kill the daemon whenever; the next tick reconstructs everything.
+
+## Deploy
+
+Merging is not shipping. A pipeline that stops at an approved PR is a PR generator,
+so stage 8 exists — but only when the target repo asks for it in `.autodev.json`:
+
+```json
+{ "deploy": { "merge": true, "strategy": "squash", "cmd": "./deploy.sh" } }
+```
+
+`merge` merges the run's PR with `gh pr merge --delete-branch` (`strategy` is
+`squash` | `merge` | `rebase`); `cmd` then runs in the **main repo path**, not the
+worktree — that is where your deploy tooling and credentials live. Either half can
+be omitted: `{"deploy":{"merge":true}}` merges and stops, `{"deploy":{"merge":false,
+"cmd":"..."}}` deploys something you merge elsewhere.
+
+The stage is not agentic. The runner runs both steps and **parks on failure** with
+the output in `~/.autodev/runs/<id>/deploy-output.txt`; there is no fix loop,
+because a half-deployed application is the one place in this pipeline where another
+unsupervised session can make things materially worse.
+
+For zero-downtime, put a blue-green flip in `cmd`: deploy to standby, health-check
+it, then switch. autodev has no opinion beyond "the command must exit 0".
 
 ## Troubleshooting
 
@@ -116,6 +209,7 @@ Per-repo `.autodev.json` (committed to the *target* repo):
 | `until` | `"analyze"` | always stop after this stage |
 | `push` | `false` | never push/PR — caps runs at Verify |
 | `branchPrefix` | `"feature"` | branch naming: `<prefix>/NNN-slug` |
+| `deploy` | `{"merge":true,"cmd":"./deploy.sh"}` | enables stage 8 — see [Deploy](#deploy). Absent = 7-stage pipeline |
 
 Env vars:
 
@@ -174,6 +268,14 @@ starts fresh at stage 1. To force a specific spec, pass `--spec <path>`.
   shares `.git` with your main checkout, and sessions inherit your full
   environment — credentials included. Only point autodev at repos and
   requirements you'd trust an unsupervised agent with.
+- Stage 8 merges and deploys **without a human approving the merge**. It is off
+  unless you put `deploy` in `.autodev.json`, and turning it on means an agent's
+  work can reach your users with no person in the path. Enable it on a repo whose
+  deploy is reversible, and keep the escalation path real: a parked run is the
+  factory asking for you.
+- `autodev daemon --auto-accept` lets anyone who can file an issue in that repo
+  start an autonomous run. Leave it off on public repos; without it, an issue only
+  moves when someone with write access labels it `autodev:accepted`.
 - The dashboard server binds to `127.0.0.1` only; it's never exposed on the
   network.
 - Each stage has a retry cap (default 2 outer retries, 3 review⇄fix rounds)

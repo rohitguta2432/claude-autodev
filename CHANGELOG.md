@@ -1,6 +1,45 @@
 # Changelog
 
-## Unreleased
+## Unreleased — the factory release
+
+Four things stood between "an autonomous pipeline" and "a repository that ships
+its own code": nothing could refuse work, nothing checked the build against
+criteria the builder hadn't written, nothing merged or deployed, and nothing
+pulled the next job. All four are here.
+
+### Added
+- **Holdout scenarios.** The spec stage now writes end-to-end acceptance
+  scenarios; the runner moves them out of the worktree and into
+  `.git/info/exclude` the moment the spec gate passes, so no later session can
+  read them from the tree *or* the history. They come back for one session — the
+  acceptance check at the end of stage 7 — and a failure is fed to the builder as
+  what was *observed*, never as the scenario. A green builder-written suite is no
+  longer enough to finish a run.
+- **Mission and factory rules** (`autodev init`). `.autodev/mission.md` lets the
+  spec stage return `REJECT` and end the run as `REJECTED` before any code
+  exists — the first mechanism autodev has for telling the operator no.
+  `.autodev/factory-rules.md` is prepended to every session in the run: the
+  constraints that bind work nobody is watching, kept separate from the
+  `CLAUDE.md` that governs work you are.
+- **Stage 8, Deploy** — opt-in via `"deploy"` in `.autodev.json`. Merges the run's
+  PR and runs a deploy command from the main repo path. Deliberately not agentic:
+  it parks on failure rather than handing an unsupervised session a broken
+  production deploy.
+- **`autodev daemon`** — reconcile finished runs onto their issues, dispatch
+  `autodev:accepted` issues up to `--max-parallel`, and (only with
+  `--auto-accept`) label new ones. Concurrency is read from the run registry, so
+  the daemon is safe to restart mid-tick.
+- **`autodev run --issue <n>`** takes the requirement from a GitHub issue and
+  records the mapping the daemon reconciles against.
+
+### Changed
+- Stage count is now per repo: 7 without a deploy config, 8 with one. `autodev
+  status` and the dashboard's skip-to-finish both read the repo's own pipeline
+  rather than a global constant.
+- The draft PR is marked ready at the end of stage 7 instead of after the run, so
+  the deploy stage has a non-draft PR to merge.
+
+## Earlier — first green run
 
 The first-green-run release: everything here exists because the pipeline had
 never completed a run, and the one run it had recorded could not be diagnosed.
