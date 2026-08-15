@@ -5,7 +5,8 @@ import { spawn } from 'node:child_process';
 import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb, createRun, getRun, listRuns, updateRun, runDir, PORT, skippedSet } from './db.js';
-import { specDirOf, STAGES } from './stages.js';
+import { specDirOf, STAGES, scheduledStages } from './stages.js';
+import { repoConfig } from './config.js';
 
 const PUB = join(dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
@@ -134,8 +135,11 @@ export async function startServer({ port = PORT(), dbPath } = {}) {
         const skipped = skippedSet(run); skipped.add(stage);
         const fields = { skipped: [...skipped].sort((a, b) => a - b).join(',') };
         if (stage === run.stage) { // skipping the live/blocked stage → advance to the next un-skipped stage and resume
+          // The end of the pipeline is this repo's last scheduled stage, not the last stage
+          // that exists: deploy is opt-in, so skipping Test finishes a repo without it.
+          const last = scheduledStages(repoConfig(run.repo_path)).at(-1).n;
           let next = stage + 1; while (skipped.has(next)) next++;
-          if (next > STAGES.length) { fields.status = 'DONE'; fields.stage = STAGES.length; }
+          if (next > last) { fields.status = 'DONE'; fields.stage = last; }
           else { fields.stage = next; fields.status = 'RUNNING'; fields.blocked_reason = null; }
         }
         updateRun(db, run.id, fields);

@@ -72,9 +72,11 @@ export async function selftest() {
   const run = getRun(db2, id);
   db2.close();
   const events = readFileSync(join(runDir(id), 'events.jsonl'), 'utf8');
-  const { STAGES } = await import('./stages.js');
+  const { scheduledStages } = await import('./stages.js');
+  // The fixture repo has no deploy config, so its pipeline is the 7 stages that always run.
+  const expected = scheduledStages({});
   let ok = run.status === 'DONE';
-  for (const s of STAGES) {
+  for (const s of expected) {
     const passed = new RegExp(`"type":"stage_done","stage":${s.n}`).test(events)
       || new RegExp(`"stage":${s.n},"type":"stage_done"`).test(events);
     console.log(`  stage ${s.n} ${s.title.padEnd(10)} ${passed ? 'OK' : 'MISSING'}`);

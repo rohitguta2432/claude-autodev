@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { PORT, runDir, openDb, createRun, getRun, listRuns, updateRun, deleteRun, AUTODEV_HOME } from '../src/db.js';
 import { emit } from '../src/events.js';
-import { specDirFor, isCompleteSpecDir, STAGES, stageN } from '../src/stages.js';
+import { specDirFor, isCompleteSpecDir, STAGES, scheduledStages, stageN } from '../src/stages.js';
 import { parseJiraRef, fetchIssue } from '../src/jira.js';
 import { doctor, printChecks } from '../src/doctor.js';
 import { repoConfig } from '../src/config.js';
@@ -75,9 +75,11 @@ function parseRunArgs(args) {
   let branchArg = null;
   let testCmd = null;
   let until = null;
+  let issueRef = null;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--repo') { repoPath = args[++i]; }
+    else if (a === '--issue') { issueRef = String(args[++i]).replace(/^#/, ''); }
     else if (a === '--spec') { specArg = args[++i]; }
     else if (a === '--branch') { branchArg = args[++i]; }
     else if (a === '--test-cmd') { testCmd = args[++i]; }
@@ -89,12 +91,29 @@ function parseRunArgs(args) {
     else if (a === '--no-spawn') { noSpawn = true; }
     else words.push(a);
   }
-  return { requirement: words.join(' '), repoPath: resolve(repoPath), noSpawn, specArg, branchArg, testCmd, until };
+  return { requirement: words.join(' '), repoPath: resolve(repoPath), noSpawn, specArg, branchArg, testCmd, until, issueRef };
 }
 
+const USAGE = 'usage: autodev run "<requirement>"|<JIRA-KEY> [--repo <path>] [--issue <n>] [--spec <path>] [--branch <name>] [--test-cmd <cmd>] [--until <stage>] [--no-push]'
+  + ' | init [--repo <path>] | daemon [--repo <path>] [--interval <min>] [--max-parallel <n>] [--auto-accept] [--once]'
+  + ' | status | resume <id> | stop <id> | cost <id> | doctor [path] | selftest | install-skill [--project] [--force] | uninstall-skill [--project]';
+
 if (cmd === 'run') {
-  let { requirement, repoPath, noSpawn, specArg, branchArg, testCmd, until } = parseRunArgs(rest);
-  if (!requirement) { console.error('usage: autodev run "<requirement>"|<JIRA-KEY> [--repo <path>] [--spec <path>] [--branch <name>] [--test-cmd <cmd>] [--until <stage>] [--no-push]'); process.exit(1); }
+  let { requirement, repoPath, noSpawn, specArg, branchArg, testCmd, until, issueRef } = parseRunArgs(rest);
+  let slugPrefix = null;
+  if (issueRef) {
+    const { fetchGhIssue } = await import('../src/daemon.js');
+    try {
+      const issue = fetchGhIssue(repoPath, issueRef);
+      requirement = issue.requirement;
+      slugPrefix = `${issueRef} ${issue.title}`;
+      console.log(`#${issueRef} ${issue.title}`);
+    } catch (e) {
+      console.error(`could not read issue #${issueRef} via gh: ${String(e.stderr || e.message).trim().split('\n').at(-1)}`);
+      process.exit(1);
+    }
+  }
+  if (!requirement) { console.error(USAGE); process.exit(1); }
 
   await ensureConsent();
   // Preflight — a stranger's first failure should cost five seconds, not a parked run.
@@ -103,8 +122,8 @@ if (cmd === 'run') {
 
   // Jira mode: "autodev run CV-123" (or a browse URL) — resolve the ticket into the
   // requirement before anything else, so spec matching and slug use the real summary.
-  const jiraKey = parseJiraRef(requirement);
-  let issueType = null, slugSource = requirement;
+  const jiraKey = issueRef ? null : parseJiraRef(requirement);
+  let issueType = null, slugSource = slugPrefix ?? requirement;
   if (jiraKey) {
     console.log(`fetching ${jiraKey} via atlassian-jira MCP…`);
     const issue = fetchIssue(jiraKey); // throws with a clear re-auth hint on failure
@@ -141,7 +160,7 @@ if (cmd === 'run') {
   // 004, whose branch/worktree already exist). Naming from the inserted id also keeps the
   // NNN in autodev/NNN-slug equal to the run id the dashboard and `autodev status` show.
   const id = createRun(db, { slug, repo, repo_path: repoPath, worktree: '', branch: '', requirement,
-    jira_key: jiraKey, issue_type: issueType, test_cmd: testCmd, until_stage: until,
+    jira_key: jiraKey, issue_type: issueType, test_cmd: testCmd, until_stage: until, issue_ref: issueRef,
     // Persist the adoption, don't just print it: every stage resolves the spec through this,
     // and without it they each re-pick the highest-numbered directory instead (FR-019).
     spec_dir: adoptedSpec, stage: adoptedSpec ? 2 : 1 });
@@ -167,11 +186,81 @@ if (cmd === 'run') {
   if (!noSpawn) spawnRunner(id);
   console.log(`run #${id} started — ${branch}\nworktree: ${worktree}\ndashboard: ${base()}/`);
   if (adoptedSpec) console.log(`adopting existing spec: ${adoptedSpec} (starting at Analyze)`);
+} else if (cmd === 'init') {
+  // Scaffold the guidance layer in the TARGET repo. Templates, not defaults: an unedited
+  // mission.md that rejects nothing is honest, and better than one that guesses the repo's
+  // non-goals and starts declining work the operator wanted.
+  const repoPath = resolve(rest[0] === '--repo' ? rest[1] : rest[0] ?? process.cwd());
+  const files = [
+    ['.autodev/mission.md', `# Mission
+
+One paragraph: what this repository is for.
+
+## Goals
+
+- …
+
+## Non-goals
+
+- …
+
+Anything a spec stage judges to be a non-goal is REJECTED before any code is written,
+so this list is the only mechanism autodev has for telling you no. An empty non-goals
+list means nothing is ever out of scope.
+`],
+    ['.autodev/factory-rules.md', `# Factory rules
+
+Binding on every autodev session in this repository. These are stricter than CLAUDE.md
+on purpose: CLAUDE.md governs work a human is watching, and this file governs work
+nobody is watching.
+
+- One task at a time. If a task cannot be finished and verified in one pass, split it.
+- Never weaken, skip, or delete a test to make a suite green.
+- Never widen the blast radius beyond what the spec asks for — no drive-by refactors.
+- Prefer the boring change. An unsupervised clever change has no reviewer.
+- If the requirement and the code disagree about intent, stop and say so in the spec
+  rather than guessing.
+`],
+  ];
+  let wrote = 0;
+  for (const [rel, body] of files) {
+    const dest = join(repoPath, rel);
+    if (existsSync(dest)) { console.log(`kept    ${rel} (already exists)`); continue; }
+    mkdirSync(dirname(dest), { recursive: true });
+    writeFileSync(dest, body);
+    console.log(`created ${rel}`);
+    wrote++;
+  }
+  console.log(wrote
+    ? '\nedit both, commit them, and the next run will read them.'
+    : '\nnothing to do — the guidance layer is already in place.');
+} else if (cmd === 'daemon') {
+  const arg = (flag, dflt) => { const i = rest.indexOf(flag); return i === -1 ? dflt : rest[i + 1]; };
+  const repoPath = resolve(arg('--repo', process.cwd()));
+  try { execFileSync('git', ['rev-parse', '--git-dir'], { cwd: repoPath, stdio: 'ignore' }); }
+  catch { console.error(`not a git repository: ${repoPath}`); process.exit(1); }
+  await ensureConsent(); // the daemon starts runs unattended — consent cannot be deferred to one
+  await ensureServer();
+  const { daemon } = await import('../src/daemon.js');
+  await daemon({
+    repoPath,
+    intervalMin: Number(arg('--interval', 30)),
+    maxParallel: Number(arg('--max-parallel', 2)),
+    autoAccept: rest.includes('--auto-accept'),
+    once: rest.includes('--once'),
+    cliPath: fileURLToPath(import.meta.url),
+  });
 } else if (cmd === 'status') {
   const db = openDb();
   const runs = listRuns(db);
   db.close();
-  for (const r of runs) console.log(`#${String(r.id).padStart(3, '0')} ${r.status.padEnd(8)} stage ${r.stage}/${STAGES.length}  ${r.repo}  ${r.slug}${r.blocked_reason ? '  ⚠ ' + r.blocked_reason : ''}`);
+  // Denominator per repo, not global: a repo without a deploy config has a 7-stage pipeline
+  // and "stage 7/8" would read as unfinished forever.
+  for (const r of runs) {
+    const total = scheduledStages(repoConfig(r.repo_path)).length;
+    const mark = r.status === 'REJECTED' ? '  ✕ ' : '  ⚠ ';
+    console.log(`#${String(r.id).padStart(3, '0')} ${r.status.padEnd(8)} stage ${r.stage}/${total}  ${r.repo}  ${r.slug}${r.blocked_reason ? mark + r.blocked_reason : ''}`);
+  }
 } else if (cmd === 'resume') {
   const id = Number(rest[0]);
   await ensureServer();
@@ -250,5 +339,5 @@ if (cmd === 'run') {
     console.log(`installed skill: ${dest}`);
   }
 } else {
-  console.log('usage: autodev run "<requirement>" [--repo <path>] [--spec <path>] [--branch <name>] [--test-cmd <cmd>] [--until <stage>] [--no-push] | status | resume <id> | stop <id> | cost <id> | doctor [path] | selftest | install-skill [--project] [--force] | uninstall-skill [--project]');
+  console.log(USAGE);
 }

@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
+import { triageClause, holdoutClause, HOLDOUT_DIR, HOLDOUT_VERDICT } from './guidance.js';
 
 // Every specs/NNN-* directory name in a worktree, sorted. Exported because "highest-numbered"
 // is NOT the same question as "which one did this session just create" — a repo can already
@@ -104,6 +105,10 @@ const specFile = (run, f) => {
   return join(d, f);
 };
 
+// The stages a run will actually attempt. Deploy is opt-in, so an unconfigured repo has a
+// 7-stage pipeline and says so — rather than scheduling a stage that can only no-op.
+export const scheduledStages = (cfg = {}) => STAGES.filter(s => s.key !== 'deploy' || !!cfg.deploy);
+
 // "verify" or "4" → 4; null on anything unknown.
 export const stageN = (x) => {
   const byKey = STAGES.find(s => s.key === String(x).toLowerCase())?.n;
@@ -116,9 +121,13 @@ export const STAGES = [
   {
     n: 1, key: 'spec', title: 'Spec', skill: 'autodev-specs / spec-kit',
     // Bug runs get a repro-first light spec; the artifact check below stays identical.
-    prompt: (run) => run.issue_type === 'bug'
+    // Scope judgement and acceptance criteria are appended to BOTH shapes: they belong to
+    // the session that reads the requirement fresh, before any implementation exists to
+    // rationalize against — and a bug report is as rejectable as a feature request.
+    prompt: (run) => (run.issue_type === 'bug'
       ? `This is a BUG FIX run. Requirement (from Jira ${run.jira_key ?? ''}): ${run.requirement}\nUse the systematic-debugging skill if installed; regardless, work repro-first: reproduce the bug, isolate the root cause, and write a FAILING regression test before any fix. Record your findings as a lightweight spec set specs/NNN-slug/ containing spec.md (observed vs expected behaviour, repro steps, root cause), plan.md (the fix approach and blast radius), and tasks.md (ordered checkbox tasks \`- [ ] T001 ...\`: regression test first, then the fix, then verification). Do not fix anything yet — later stages implement tasks.md.`
-      : `First check specs/ for an existing spec set covering this requirement. If a complete one exists (spec.md, plan.md, tasks.md), adopt it and do not create a duplicate; if one exists but is incomplete, complete the missing documents in place. Only create a brand-new specs/NNN-slug/ set if nothing matches. Requirement: ${run.requirement}\nUse the autodev-specs skill if it is installed; otherwise create a GitHub Spec Kit document set yourself: specs/NNN-slug/ containing spec.md (user scenarios, functional requirements, success criteria), plan.md (technical approach), research.md (decisions & rationale), data-model.md (entities/schema), quickstart.md (run & verify steps), contracts/ (API/interface specs), tasks.md (ordered checkbox tasks \`- [ ] T001 ...\`), and checklists/ (quality gates) as appropriate.`,
+      : `First check specs/ for an existing spec set covering this requirement. If a complete one exists (spec.md, plan.md, tasks.md), adopt it and do not create a duplicate; if one exists but is incomplete, complete the missing documents in place. Only create a brand-new specs/NNN-slug/ set if nothing matches. Requirement: ${run.requirement}\nUse the autodev-specs skill if it is installed; otherwise create a GitHub Spec Kit document set yourself: specs/NNN-slug/ containing spec.md (user scenarios, functional requirements, success criteria), plan.md (technical approach), research.md (decisions & rationale), data-model.md (entities/schema), quickstart.md (run & verify steps), contracts/ (API/interface specs), tasks.md (ordered checkbox tasks \`- [ ] T001 ...\`), and checklists/ (quality gates) as appropriate.`)
+      + triageClause(run.worktree) + holdoutClause(),
     check: (run) => {
       for (const f of ['spec.md', 'plan.md', 'tasks.md']) {
         const p = specFile(run, f);
@@ -182,7 +191,33 @@ export const STAGES = [
     n: 7, key: 'test', title: 'Test', skill: 'systematic-debugging', // runner executes detectTestCmd itself; claude only summoned to fix failures
     prompt: (run) => `The test suite is failing. Read .autodev/test-output.txt. Use the systematic-debugging skill if it is installed; otherwise debug methodically yourself: reproduce, isolate, find the root cause, fix it, and commit. Never weaken or delete tests to make them pass.`,
     check: (run) => { /* runner sets run._testsPassed after executing the test command */
+      // The runner drives this stage itself (test command, then the holdout scenarios) and
+      // throws on either failing; this check is the backstop for a direct/jumped invocation.
       need(run._testsPassed, 'test command exited non-zero');
+      need(run._holdout !== 'FAIL', 'holdout scenarios failed');
     },
   },
+  {
+    // Merging is not shipping. A pipeline that stops at an approved PR is a PR generator;
+    // this stage is what makes the run end in running software. Off unless the target repo
+    // opts in with "deploy" in .autodev.json — adding an autonomous merge-and-deploy to
+    // every existing install by default would be a capability nobody asked for.
+    // Deliberately NOT agentic: the runner executes merge and deploy itself and parks on
+    // failure. A failed production deploy is the last place to hand an unsupervised agent
+    // a fix loop.
+    n: 8, key: 'deploy', title: 'Deploy', skill: null,
+    prompt: () => '', // never sent — the runner owns this stage end to end
+    check: (run) => need(run._deployed, 'deploy did not complete'),
+  },
 ];
+
+// Run by the validator at the end of stage 7, against scenarios the builder never saw.
+// This is the only session in the pipeline that reads the holdout directory.
+export const holdoutPrompt = () =>
+  `An independent acceptance check. Read every scenario in ${HOLDOUT_DIR}/scenarios.md. You did NOT implement this change and must not assume it works: for each scenario, actually exercise the application as an operator would (run it, call it, drive it) and record what you observed, not what the code appears to do. Reading the implementation and concluding it is correct is a FAIL of this task, not a PASS of the scenario. Then write your verdict as JSON to ${HOLDOUT_VERDICT} in the repo root: {"verdict":"PASS"|"FAIL","findings":[{"scenario":"<number and title>","observed":"...","severity":"CRITICAL"|"HIGH"|"MEDIUM"|"LOW"}]}. PASS only if every scenario behaves as written. Change no source files.`;
+
+// Fed back to the builder when holdout fails. The scenarios themselves are withheld and the
+// directory is already gone from the worktree: a builder that can read the acceptance
+// criteria can satisfy them narrowly instead of fixing the behaviour they describe.
+export const holdoutFixPrompt = (findings) =>
+  `Acceptance scenarios you cannot see failed on this branch. You get only what was observed, never the scenarios themselves:\n${JSON.stringify(findings, null, 2)}\nFix the underlying behaviour so an operator doing these things sees the correct result. Do not add special cases for these inputs, keep the existing tests green, and commit.`;

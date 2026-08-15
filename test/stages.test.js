@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { STAGES, findSpecDir, specDirOf, detectTestCmd, specDirFor, isCompleteSpecDir } from '../src/stages.js';
+import { STAGES, scheduledStages, findSpecDir, specDirOf, detectTestCmd, specDirFor, isCompleteSpecDir } from '../src/stages.js';
 import { git, commit } from './helpers.js';
 
 function gitRepo() {
@@ -13,8 +13,15 @@ function gitRepo() {
 }
 
 test('stage table shape', () => {
-  assert.deepEqual(STAGES.map(s => s.key), ['spec', 'analyze', 'implement', 'verify', 'push', 'review', 'test']);
+  assert.deepEqual(STAGES.map(s => s.key), ['spec', 'analyze', 'implement', 'verify', 'push', 'review', 'test', 'deploy']);
   for (const s of STAGES) assert.ok(s.n >= 1 && s.title && typeof s.check === 'function');
+});
+
+test('deploy is scheduled only when the repo configures it', () => {
+  assert.deepEqual(scheduledStages({}).map(s => s.key).at(-1), 'test');
+  assert.equal(scheduledStages({}).length, 7);
+  assert.equal(scheduledStages({ deploy: { cmd: './ship.sh' } }).length, 8);
+  assert.deepEqual(scheduledStages({ deploy: { merge: true } }).at(-1).key, 'deploy');
 });
 
 test('findSpecDir picks newest specs/NNN-*', () => {

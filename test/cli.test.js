@@ -294,3 +294,25 @@ test('.autodev.json branchPrefix names the run branch', () => {
   const out = execFileSync('node', ['bin/autodev.js', 'run', 'prefix demo run', '--repo', repo, '--no-spawn'], { encoding: 'utf8' });
   assert.match(out, /feature\/\d{3}-prefix-demo-run/);
 });
+
+test('autodev init scaffolds the guidance layer and never clobbers an edited one', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'repo-'));
+  git(repo, ['init', '-q', '-b', 'main'], commit('init', '--allow-empty'));
+  const out = execFileSync('node', ['bin/autodev.js', 'init', '--repo', repo], { encoding: 'utf8' });
+  assert.match(out, /created \.autodev\/mission\.md/);
+  assert.match(out, /created \.autodev\/factory-rules\.md/);
+  assert.match(readFileSync(join(repo, '.autodev/mission.md'), 'utf8'), /Non-goals/);
+  assert.match(readFileSync(join(repo, '.autodev/factory-rules.md'), 'utf8'), /One task at a time/);
+
+  // second run must leave the operator's edits alone — this is the file that decides what
+  // the factory refuses, and overwriting it would silently widen scope
+  writeFileSync(join(repo, '.autodev/mission.md'), '# Mine\n');
+  const again = execFileSync('node', ['bin/autodev.js', 'init', '--repo', repo], { encoding: 'utf8' });
+  assert.match(again, /kept    \.autodev\/mission\.md/);
+  assert.equal(readFileSync(join(repo, '.autodev/mission.md'), 'utf8'), '# Mine\n');
+});
+
+test('usage names the new commands', () => {
+  const out = execFileSync('node', ['bin/autodev.js'], { encoding: 'utf8' });
+  for (const c of ['init', 'daemon', '--issue', '--auto-accept']) assert.match(out, new RegExp(c.replace(/[-]/g, '\\-')));
+});

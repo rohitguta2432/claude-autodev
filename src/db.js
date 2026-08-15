@@ -19,11 +19,11 @@ export function openDb(path = join(AUTODEV_HOME(), 'autodev.db')) {
     stage INTEGER NOT NULL DEFAULT 1,
     pid INTEGER, pr_url TEXT, blocked_reason TEXT,
     jira_key TEXT, issue_type TEXT, skipped TEXT, test_cmd TEXT, until_stage INTEGER,
-    spec_dir TEXT,
+    spec_dir TEXT, issue_ref TEXT,
     created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`);
   // migrate pre-existing DBs — ALTER is a no-op error when the column already exists
   for (const col of ['jira_key TEXT', 'issue_type TEXT', 'skipped TEXT', 'test_cmd TEXT', 'until_stage INTEGER',
-                     'spec_dir TEXT']) {
+                     'spec_dir TEXT', 'issue_ref TEXT']) {
     try { db.exec(`ALTER TABLE runs ADD COLUMN ${col}`); } catch { /* already there */ }
   }
   return db;
@@ -32,11 +32,11 @@ export function openDb(path = join(AUTODEV_HOME(), 'autodev.db')) {
 export function createRun(db, r) {
   const now = Date.now();
   const res = db.prepare(`INSERT INTO runs
-    (slug, repo, repo_path, worktree, branch, requirement, stage, jira_key, issue_type, test_cmd, until_stage, spec_dir, created_at, updated_at)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    (slug, repo, repo_path, worktree, branch, requirement, stage, jira_key, issue_type, test_cmd, until_stage, spec_dir, issue_ref, created_at, updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(r.slug, r.repo, r.repo_path, r.worktree, r.branch, r.requirement, r.stage ?? 1,
          r.jira_key ?? null, r.issue_type ?? null, r.test_cmd ?? null, r.until_stage ?? null,
-         r.spec_dir ?? null, now, now);
+         r.spec_dir ?? null, r.issue_ref ?? null, now, now);
   return Number(res.lastInsertRowid);
 }
 
@@ -47,8 +47,20 @@ export const deleteRun = (db, id) => db.prepare('DELETE FROM runs WHERE id = ?')
 // Stages the user skipped from the dashboard — stored as a comma-joined string on the run row.
 export const skippedSet = (run) => new Set(String(run?.skipped || '').split(',').filter(Boolean).map(Number));
 // In-progress first, then blocked, then everything else; newest-first within each group.
+// REJECTED sorts with the terminal statuses: a run the factory declined on scope is a
+// finished decision, not something waiting on the operator.
 export const listRuns = (db) => db.prepare(
   `SELECT * FROM runs ORDER BY CASE status WHEN 'RUNNING' THEN 0 WHEN 'BLOCKED' THEN 1 ELSE 2 END, id DESC`).all();
+
+// Runs the daemon considers live for one repo — its concurrency is counted from the db, not
+// from its own memory, so restarting the daemon cannot double-start work already in flight.
+export const activeRuns = (db, repoPath) =>
+  db.prepare(`SELECT * FROM runs WHERE repo_path = ? AND status = 'RUNNING'`).all(repoPath);
+
+// Every run this daemon has started for an issue, newest first — the mapping that keeps a
+// tick from re-queuing an issue whose run is already done, blocked, or rejected.
+export const runsForIssues = (db, repoPath) =>
+  db.prepare(`SELECT * FROM runs WHERE repo_path = ? AND issue_ref IS NOT NULL ORDER BY id DESC`).all(repoPath);
 
 export function updateRun(db, id, fields) {
   const keys = Object.keys(fields);

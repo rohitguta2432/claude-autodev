@@ -4,10 +4,13 @@ import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb, getRun, updateRun, runDir, PORT, skippedSet } from './db.js';
 import { emit } from './events.js';
-import { STAGES, stageN, detectTestCmd, findSpecDir, specDirs } from './stages.js';
+import { STAGES, scheduledStages, stageN, detectTestCmd, findSpecDir, specDirs,
+         holdoutPrompt, holdoutFixPrompt } from './stages.js';
 import { repoConfig, modelFor } from './config.js';
 import { parseClaudeResult } from './metrics.js';
 import { causeLine, classify, sessionBlock } from './session.js';
+import { promptPrefix, excludeHoldout, sequesterHoldout, restoreHoldout, clearHoldout,
+         hasHoldout, TRIAGE, HOLDOUT_VERDICT } from './guidance.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CFG = { maxRetries: 2, reviewLoops: 3, stageTimeoutMin: 45, budgetHours: 6 };
@@ -65,6 +68,9 @@ function runClaude(prompt, stageN) {
       `cost budget exceeded: $${costUsd.toFixed(2)} spent >= maxCostUsd $${cfg.maxCostUsd} (.autodev.json) — raise it and resume`), { final: true });
   const bin = process.env.AUTODEV_CLAUDE_BIN || 'claude';
   const model = modelFor(cfg, STAGES[stageN - 1]?.key); // per-stage > repo model > env pin
+  // Factory rules ride on every session, including the review and holdout ones — they are
+  // the repo's constraints on unsupervised work, not the builder's alone.
+  prompt = promptPrefix(run.worktree) + prompt;
   const args = process.env.AUTODEV_CLAUDE_BIN
     ? ['-p', prompt] // stub in tests
     : ['-p', prompt, '--dangerously-skip-permissions', '--settings', hooksFile, '--output-format', 'json',
@@ -123,6 +129,91 @@ async function park(stage, err, output = '') {
   process.exit(0);
 }
 
+// A rejection is not a failure: the pipeline read the mission, judged the requirement out of
+// scope, and declined it. It gets its own terminal status so `autodev status` never shows a
+// working factory as a broken one, and so resume does not re-litigate a settled decision.
+async function reject(stage, reason) {
+  writeFileSync(join(ctx.runDir, 'blocked.md'),
+    `# Run ${runId} rejected at stage ${stage.n} (${stage.title})\n\n**Reason:** ${reason}\n\nThe requirement was judged out of scope against ${join(run.worktree, '.autodev/mission.md')}.\nEdit the mission or narrow the requirement, then start a new run.\n`);
+  saveState({ status: 'REJECTED', stage: stage.n, blocked_reason: reason });
+  await ev({ type: 'rejected', stage: stage.n, detail: reason });
+  process.exit(0);
+}
+
+// The spec session's scope verdict, or null when the repo has no mission.md to judge against.
+function triageVerdict() {
+  const p = join(run.worktree, TRIAGE);
+  if (!existsSync(p)) return null;
+  try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return null; }
+}
+
+// Acceptance scenarios written before implementation and hidden from the builder ever since.
+// Restored only for the validating session, and removed again before any fix session runs —
+// a builder that reads the criteria can satisfy them narrowly instead of fixing the behaviour.
+async function holdoutStage(stage) {
+  if (!hasHoldout(ctx.runDir)) { run._holdout = 'SKIPPED'; return; }
+  for (let round = 1; round <= CFG.reviewLoops; round++) {
+    rmSync(join(run.worktree, HOLDOUT_VERDICT), { force: true });
+    restoreHoldout(run.worktree, ctx.runDir);
+    await ev({ type: 'activity', stage: stage.n, detail: `holdout scenarios — round ${round}/${CFG.reviewLoops}` });
+    try { runClaude(holdoutPrompt(), stage.n); } finally { clearHoldout(run.worktree); }
+    const p = join(run.worktree, HOLDOUT_VERDICT);
+    if (!existsSync(p)) { // no verdict written — advisory, not a reason to fail a green run
+      await ev({ type: 'activity', stage: stage.n, detail: 'holdout session wrote no verdict — skipped' });
+      run._holdout = 'SKIPPED'; return;
+    }
+    const { verdict, findings = [] } = JSON.parse(readFileSync(p, 'utf8'));
+    if (verdict === 'PASS') {
+      run._holdout = 'PASS';
+      await ev({ type: 'activity', stage: stage.n, detail: 'holdout scenarios PASS' });
+      return;
+    }
+    run._holdout = 'FAIL';
+    // Budget spent. Throwing here rather than leaving a flag for stage.check is what makes
+    // this gate real: the runner calls testStage INSTEAD of the stage's check, so a verdict
+    // that only sets a field is a verdict nothing ever reads.
+    if (round === CFG.reviewLoops)
+      throw Object.assign(new Error(`holdout scenarios still failing after ${round} round(s): ${findings.map(f => f.observed ?? f.scenario).join('; ').slice(0, 200)}`), { final: true });
+    await ev({ type: 'retry', stage: stage.n, detail: `holdout: ${findings.length} finding(s) — fixing` });
+    runClaude(holdoutFixPrompt(findings), stage.n);
+  }
+}
+
+// Merge and deploy, executed by the runner rather than a session. Config lives in the target
+// repo's .autodev.json: {"deploy": {"merge": true, "strategy": "squash", "cmd": "./deploy.sh"}}.
+async function deployStage(stage) {
+  const d = cfg.deploy || {};
+  if (d.merge !== false) {
+    const pr = getRun(db, runId).pr_url;
+    if (!pr) throw Object.assign(new Error('deploy needs a merged PR but no PR was opened (push stage skipped?)'), { final: true });
+    const strategy = ['squash', 'merge', 'rebase'].includes(d.strategy) ? d.strategy : 'squash';
+    await ev({ type: 'activity', stage: stage.n, detail: `merging ${pr} (--${strategy})` });
+    try {
+      execFileSync('gh', ['pr', 'merge', pr, `--${strategy}`, '--delete-branch'],
+        { cwd: run.worktree, encoding: 'utf8', timeout: 120_000 });
+    } catch (e) {
+      throw Object.assign(new Error(`gh pr merge failed: ${causeLine(`${e.stdout ?? ''}\n${e.stderr ?? ''}`, 200) || e.message}`), { final: true });
+    }
+  }
+  if (d.cmd) {
+    await ev({ type: 'activity', stage: stage.n, detail: `deploy: ${d.cmd}` });
+    // Shell string by design, exactly like testCmd: it is written by the repo's owner in a
+    // committed .autodev.json and needs pipes and && to be useful. Nothing model-generated
+    // or run-derived is interpolated into it.
+    try {
+      const out = execSync(d.cmd, { cwd: run.repo_path, encoding: 'utf8', timeout: CFG.stageTimeoutMin * 60_000 });
+      writeFileSync(join(ctx.runDir, 'deploy-output.txt'), out);
+    } catch (e) {
+      const out = `${e.stdout ?? ''}\n${e.stderr ?? ''}`;
+      writeFileSync(join(ctx.runDir, 'deploy-output.txt'), out);
+      // No fix loop here on purpose: a half-deployed application is the one state in this
+      // pipeline where another unsupervised session can make things materially worse.
+      throw Object.assign(new Error(`deploy command failed: ${causeLine(out, 200)}`), { final: true });
+    }
+  }
+  run._deployed = true;
+}
+
 async function reviewStage(stage) { // inner review⇄fix loop
   for (let round = 1; round <= CFG.reviewLoops; round++) {
     rmSync(join(run.worktree, '.autodev/review.json'), { force: true });
@@ -153,7 +244,8 @@ async function testStage(stage) {
   for (let attempt = 0; ; attempt++) {
     try {
       const out = execSync(cmd, { cwd: run.worktree, encoding: 'utf8', timeout: CFG.stageTimeoutMin * 60_000 });
-      writeFileSync(join(run.worktree, '.autodev/test-output.txt'), out); run._testsPassed = true; return;
+      writeFileSync(join(run.worktree, '.autodev/test-output.txt'), out); run._testsPassed = true;
+      break;
     } catch (e) {
       const out = `${e.stdout ?? ''}\n${e.stderr ?? ''}`;
       writeFileSync(join(run.worktree, '.autodev/test-output.txt'), out);
@@ -163,6 +255,11 @@ async function testStage(stage) {
       runClaude(stage.prompt(run), stage.n);
     }
   }
+  // The repo's own suite is the builder's; the holdout scenarios are not. Only both green
+  // makes this stage green. Outside the loop above on purpose: a holdout failure is not a
+  // test-command failure, and running it inside would let the test⇄fix loop swallow the
+  // verdict and park the run under the wrong diagnosis.
+  await holdoutStage(stage);
 }
 
 // ---- main loop ----
@@ -175,10 +272,14 @@ saveState({ pid: process.pid });
 const skipped = skippedSet(run); // stages the user skipped from the dashboard — bypassed here too
 // Snapshot taken before any stage runs, so the spec stage's creation can be identified by diff.
 const specsBefore = new Set(specDirs(run.worktree));
+// Before the spec session can commit them: holdout scenarios must never enter git, or the
+// builder reads out of the history what the sequester takes off the disk.
+excludeHoldout(run.worktree);
+const PIPELINE = scheduledStages(cfg);
 // Hard stop after stage N — change-controlled repos can forbid autonomous push/PR
 // outright. Precedence: --until (run row) > .autodev.json "until" > "push": false.
-const until = run.until_stage || stageN(cfg.until) || (cfg.push === false ? stageN('verify') : null) || STAGES.length;
-for (const stage of STAGES.filter(s => s.n >= run.stage && s.n <= until && !skipped.has(s.n))) {
+const until = run.until_stage || stageN(cfg.until) || (cfg.push === false ? stageN('verify') : null) || PIPELINE.at(-1).n;
+for (const stage of PIPELINE.filter(s => s.n >= run.stage && s.n <= until && !skipped.has(s.n))) {
   if (Date.now() - started > CFG.budgetHours * 3_600_000) await park(stage, new Error('wall-clock budget exceeded'));
   saveState({ stage: stage.n });
   await ev({ type: 'stage_started', stage: stage.n, detail: stage.title });
@@ -191,9 +292,16 @@ for (const stage of STAGES.filter(s => s.n >= run.stage && s.n <= until && !skip
     try {
       if (stage.key === 'review') await reviewStage(stage);
       else if (stage.key === 'test') await testStage(stage);
+      else if (stage.key === 'deploy') { await deployStage(stage); stage.check(run); }
       else {
         const extra = lastErr ? `\n\nA previous attempt failed its verification: ${lastErr.message}. Address that specifically.` : '';
         lastOut = runClaude(stage.prompt(run) + extra, stage.n);
+        // Scope first: a rejected requirement has no spec to gate, so checking artifacts
+        // before the verdict would park the run for the absence the rejection caused.
+        if (stage.key === 'spec') {
+          const t = triageVerdict();
+          if (t?.verdict === 'REJECT') await reject(stage, String(t.reason || 'out of scope').slice(0, 300));
+        }
         stage.check(run);
       }
       ok = true;
@@ -223,23 +331,31 @@ for (const stage of STAGES.filter(s => s.n >= run.stage && s.n <= until && !skip
       saveState({ spec_dir: run.spec_dir });
     }
   }
+  // The moment the spec is accepted, the acceptance criteria leave the repository. Every
+  // session after this one — builder, verifier, reviewer, fixer — runs blind to them.
+  if (stage.key === 'spec' && sequesterHoldout(run.worktree, ctx.runDir))
+    await ev({ type: 'activity', stage: stage.n, detail: 'holdout scenarios sequestered — builder cannot read them' });
   if (stage.key === 'push' && existsSync(join(run.worktree, '.autodev/pr-url'))) {
     const url = readFileSync(join(run.worktree, '.autodev/pr-url'), 'utf8').trim();
     saveState({ pr_url: url }); await ev({ type: 'pr_opened', stage: stage.n, detail: url });
   }
-  await ev({ type: 'stage_done', stage: stage.n, detail: stage.title });
-}
-// Review + Test are green — the stage-5 draft PR may now face reviewers.
-const finalRun = getRun(db, runId);
-if (finalRun.pr_url) {
-  try {
-    execFileSync('gh', ['pr', 'ready', finalRun.pr_url], { cwd: run.worktree, encoding: 'utf8', timeout: 30_000 });
-    await ev({ type: 'activity', stage: STAGES.at(-1).n, detail: 'draft PR marked ready for review' });
-  } catch {
-    await ev({ type: 'activity', stage: STAGES.at(-1).n, detail: 'could not mark PR ready (gh missing or not a draft) — check it manually' });
+  // Review + Test are green — the stage-5 draft PR may now face reviewers. Done here rather
+  // than after the loop because the deploy stage merges it, and `gh pr merge` on a draft
+  // fails: marking ready has to happen while there is still a draft to mark.
+  if (stage.key === 'test') {
+    const pr = getRun(db, runId).pr_url;
+    if (pr) {
+      try {
+        execFileSync('gh', ['pr', 'ready', pr], { cwd: run.worktree, encoding: 'utf8', timeout: 30_000 });
+        await ev({ type: 'activity', stage: stage.n, detail: 'draft PR marked ready for review' });
+      } catch {
+        await ev({ type: 'activity', stage: stage.n, detail: 'could not mark PR ready (gh missing or not a draft) — check it manually' });
+      }
+    }
   }
+  await ev({ type: 'stage_done', stage: stage.n, detail: stage.title });
 }
 saveState({ status: 'DONE' });
 await ev({ type: 'run_done', stage: until,
-  ...(until < STAGES.length ? { detail: `stopped after stage ${until} (${STAGES[until - 1].title}) as requested` } : {}) });
+  ...(until < PIPELINE.at(-1).n ? { detail: `stopped after stage ${until} (${STAGES[until - 1].title}) as requested` } : {}) });
 db.close();
