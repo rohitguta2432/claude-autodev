@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execSync } from 'node:child_process';
 import { STAGES, scheduledStages, findSpecDir, specDirOf, detectTestCmd, specDirFor, isCompleteSpecDir } from '../src/stages.js';
 import { git, commit } from './helpers.js';
 
@@ -110,7 +111,7 @@ test('detectTestCmd finds gradle at root and markers one level down', () => {
   writeFileSync(join(g, 'build.gradle'), '');
   assert.equal(detectTestCmd(g), 'gradle test');
   writeFileSync(join(g, 'gradlew'), '');
-  assert.match(detectTestCmd(g), /gradlew(\.bat)? test$/);
+  assert.equal(detectTestCmd(g), process.platform === 'win32' ? '.\\gradlew.bat test' : './gradlew test');
   // marker only in a subdir → command cd's into it
   const m = mkdtempSync(join(tmpdir(), 'p-'));
   mkdirSync(join(m, 'backend'));
@@ -121,6 +122,25 @@ test('detectTestCmd finds gradle at root and markers one level down', () => {
   mkdirSync(join(n, 'node_modules', 'x'), { recursive: true });
   writeFileSync(join(n, 'node_modules', 'x', 'pytest.ini'), '');
   assert.equal(detectTestCmd(n), null);
+});
+
+test('win32: the detected gradlew command survives NoDefaultCurrentDirectoryInExePath=1', { skip: process.platform !== 'win32' }, () => {
+  const g = mkdtempSync(join(tmpdir(), 'p-'));
+  writeFileSync(join(g, 'build.gradle'), '');
+  writeFileSync(join(g, 'gradlew'), '');
+  writeFileSync(join(g, 'gradlew.bat'), '@echo gradle-ok\r\n');
+  const env = { ...process.env, NoDefaultCurrentDirectoryInExePath: '1' };
+  // the bare form is exactly what that env var breaks...
+  assert.throws(() => execSync('gradlew.bat test', { cwd: g, env, stdio: 'pipe' }), /is not recognized/);
+  // ...and the detected form must keep working
+  assert.match(execSync(detectTestCmd(g), { cwd: g, env, encoding: 'utf8' }), /gradle-ok/);
+  // the composed subdir form (cd "<sub>" && .\gradlew.bat test) must survive it too
+  const s = mkdtempSync(join(tmpdir(), 'p-'));
+  mkdirSync(join(s, 'app'));
+  writeFileSync(join(s, 'app', 'build.gradle'), '');
+  writeFileSync(join(s, 'app', 'gradlew'), '');
+  writeFileSync(join(s, 'app', 'gradlew.bat'), '@echo gradle-ok\r\n');
+  assert.match(execSync(detectTestCmd(s), { cwd: s, env, encoding: 'utf8' }), /gradle-ok/);
 });
 
 test('detectTestCmd finds tox / requirements+tests / Makefile test target / csproj', () => {

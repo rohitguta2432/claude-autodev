@@ -55,8 +55,10 @@ function markerCmd(dir) {
   if (has('tox.ini')) return 'tox -q';
   if (has('requirements.txt') && has('tests')) return 'python -m pytest -q';
   if (has('pom.xml')) return 'mvn -q test';
+  // .\ not bare: cmd.exe under NoDefaultCurrentDirectoryInExePath=1 refuses a bare .bat from
+  // the cwd; the explicit relative path resolves everywhere, including after the subdir scan's cd.
   if (has('build.gradle') || has('build.gradle.kts'))
-    return has('gradlew') ? `${process.platform === 'win32' ? 'gradlew.bat' : './gradlew'} test` : 'gradle test';
+    return has('gradlew') ? `${process.platform === 'win32' ? '.\\gradlew.bat' : './gradlew'} test` : 'gradle test';
   if (has('go.mod')) return 'go test ./...';
   if (has('Cargo.toml')) return 'cargo test -q';
   if (has('Makefile') && /^test:/m.test(readFileSync(join(dir, 'Makefile'), 'utf8'))) return 'make test';
