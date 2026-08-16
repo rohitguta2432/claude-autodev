@@ -4,7 +4,7 @@ import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb, getRun, updateRun, runDir, PORT, skippedSet } from './db.js';
 import { emit } from './events.js';
-import { STAGES, scheduledStages, stageN, detectTestCmd, findSpecDir, specDirs,
+import { STAGES, scheduledStages, untilStage, detectTestCmd, findSpecDir, specDirs,
          holdoutPrompt, holdoutFixPrompt } from './stages.js';
 import { repoConfig, modelFor } from './config.js';
 import { parseClaudeResult } from './metrics.js';
@@ -36,6 +36,12 @@ writeFileSync(hooksFile, JSON.stringify({ hooks: { PostToolUse: [{ matcher: 'Edi
   hooks: [{ type: 'command', command: `node ${join(ROOT, 'bin/hook-emit.js')}` }] }] } }));
 
 const cfg = repoConfig(run.worktree);
+// What THIS run actually loaded. The worktree checkout is tracked files only, so an
+// uncommitted .autodev.json in the main repo is absent here and its keys read as
+// defaults; this line is how an operator notices (doctor warns preflight too).
+await ev({ type: 'activity', stage: run.stage, detail: existsSync(join(run.worktree, '.autodev.json'))
+  ? `config .autodev.json: ${Object.keys(cfg).length ? Object.entries(cfg).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(' ').slice(0, 200) : 'present but empty or unparseable'}`
+  : 'config: no .autodev.json in the worktree, defaults apply' });
 // Running cost for THIS run — seeded from prior metrics events so resume keeps counting.
 let costUsd = 0;
 try {
@@ -276,9 +282,9 @@ const specsBefore = new Set(specDirs(run.worktree));
 // builder reads out of the history what the sequester takes off the disk.
 excludeHoldout(run.worktree);
 const PIPELINE = scheduledStages(cfg);
-// Hard stop after stage N — change-controlled repos can forbid autonomous push/PR
-// outright. Precedence: --until (run row) > .autodev.json "until" > "push": false.
-const until = run.until_stage || stageN(cfg.until) || (cfg.push === false ? stageN('verify') : null) || PIPELINE.at(-1).n;
+// Hard stop after stage N: change-controlled repos can forbid autonomous push/PR
+// outright; precedence lives in untilStage, shared with run kickoff so the two never disagree.
+const until = untilStage(cfg, run.until_stage);
 for (const stage of PIPELINE.filter(s => s.n >= run.stage && s.n <= until && !skipped.has(s.n))) {
   if (Date.now() - started > CFG.budgetHours * 3_600_000) await park(stage, new Error('wall-clock budget exceeded'));
   saveState({ stage: stage.n });

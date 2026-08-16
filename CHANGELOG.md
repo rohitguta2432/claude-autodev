@@ -39,6 +39,18 @@ pulled the next job. All four are here.
   the repo's shared `.git/info/exclude` (hiding them from `git status` in the main checkout
   too) so autodev's own sessions cannot commit or push them, and `doctor` warns when common
   build files sit untracked and unlisted.
+- **Doctor: config reachability.** Warns when `.autodev.json` is untracked,
+  gitignored, modified, or unparseable: a run reads the committed copy in its
+  worktree, so an uncommitted `maxCostUsd` is an unenforced one. The runner now
+  also logs the config it actually loaded at run start.
+- **Doctor: test-command honesty.** Warns when the detected test command is
+  likely vacuous (gradle/maven with no test sources exits 0 having run nothing)
+  or ambiguous (several subprojects carry test markers and detection runs only
+  the first), and names whether the command was detected or configured.
+- **Kickoff visibility and gh account check.** Kickoff prints what the run will
+  do to the world (push + draft PR, merge + deploy when configured) and how to
+  cap it; doctor warns when the active `gh` account does not own `origin` (stage
+  5 would push and PR from that account).
 
 ### Changed
 - Stage count is now per repo: 7 without a deploy config, 8 with one. `autodev

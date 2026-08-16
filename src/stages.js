@@ -75,10 +75,34 @@ export function detectTestCmd(dir) {
   for (const d of readdirSync(dir)) {
     const sub = join(dir, d);
     if (d.startsWith('.') || d === 'node_modules' || !statSync(sub).isDirectory()) continue;
-    const c = markerCmd(sub);
+    const c = safeMarker(sub); // total: a malformed sibling package.json must not kill detection
     if (c) return `cd ${JSON.stringify(sub)} && ${c}`;
   }
   return null; // caller decides: runner PARKS on null rather than passing a suite it never ran
+}
+
+// A probe must be total: one malformed package.json in a sibling subdir must not take
+// doctor (and with it `autodev run`) down. detectTestCmd never reads past the first
+// marker; these helpers read them all.
+const safeMarker = (d) => { try { return markerCmd(d); } catch { return null; } };
+export const markerSubdirs = (dir) => {
+  let entries = [];
+  try { entries = readdirSync(dir); } catch { return []; }
+  return entries.filter(d => {
+    try {
+      const sub = join(dir, d);
+      return !d.startsWith('.') && d !== 'node_modules' && statSync(sub).isDirectory() && !!safeMarker(sub);
+    } catch { return false; }
+  });
+};
+export function hasTestSources(dir) {
+  const probe = (d) => { try { return readdirSync(join(d, 'src')).some(n => /test/i.test(n)); } catch { return false; } };
+  let entries = [];
+  try { entries = readdirSync(dir); } catch { return false; }
+  return probe(dir) || entries.some(d => {
+    try { return !d.startsWith('.') && d !== 'node_modules' && statSync(join(dir, d)).isDirectory() && probe(join(dir, d)); }
+    catch { return false; }
+  });
 }
 
 const git = (wt, cmd) => execSync(`git ${cmd}`, { cwd: wt, encoding: 'utf8', windowsHide: true });
@@ -118,6 +142,11 @@ export const stageN = (x) => {
   const n = Number(x);
   return n >= 1 && n <= STAGES.length ? n : null;
 };
+
+// Hard stop after stage N. Precedence: --until (run row) > .autodev.json "until" > "push": false.
+// Shared by the runner (enforcement) and run kickoff (visibility) so the two never disagree.
+export const untilStage = (cfg, runUntil) =>
+  runUntil || stageN(cfg.until) || (cfg.push === false ? stageN('verify') : null) || scheduledStages(cfg).at(-1).n;
 
 export const STAGES = [
   {

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { PORT, runDir, openDb, createRun, getRun, listRuns, updateRun, deleteRun, AUTODEV_HOME } from '../src/db.js';
 import { emit } from '../src/events.js';
-import { specDirFor, isCompleteSpecDir, STAGES, scheduledStages, stageN } from '../src/stages.js';
+import { specDirFor, isCompleteSpecDir, STAGES, scheduledStages, stageN, untilStage } from '../src/stages.js';
 import { parseJiraRef, fetchIssue } from '../src/jira.js';
 import { doctor, printChecks } from '../src/doctor.js';
 import { repoConfig } from '../src/config.js';
@@ -123,6 +123,24 @@ if (cmd === 'run') {
   const failures = printChecks((await doctor(repoPath)).filter(c => c.severity !== 'pass'));
   if (failures.length) { console.error(`\n${failures.length} preflight check(s) failed — fix and re-run (autodev doctor to re-check)`); process.exit(1); }
 
+  // Autonomy with visibility: the default pipeline leaves the machine (push + draft PR,
+  // then merge + deploy when configured). Say so at kickoff, before it happens.
+  const cfg = repoConfig(repoPath); // kept for branchPrefix reuse below
+  // The cap must come from the config the RUN will read: its worktree checkout holds the
+  // committed .autodev.json, not this folder's working copy (an uncommitted "push": false
+  // must not silence the warn for a run that will push). --branch adopts another branch's
+  // checkout, so the cap reads that branch's config, not HEAD's.
+  let headCfg = {};
+  try { headCfg = JSON.parse(execFileSync('git', ['show', `${branchArg || 'HEAD'}:.autodev.json`],
+    { cwd: repoPath, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000, windowsHide: true })); } catch {}
+  const cap = untilStage(headCfg, until);
+  if (cap >= stageN('push')) {
+    const acts = ['push a branch and open a draft PR on origin'];
+    if (headCfg.deploy && cap >= stageN('deploy'))
+      acts.push(headCfg.deploy.merge !== false ? 'MERGE that PR and deploy' : 'run the deploy command');
+    console.log(`[ WARN ] autonomous endpoint: this run will ${acts.join(', then ')} (cap it with --until verify, --no-push, or "push": false in .autodev.json)`);
+  }
+
   // Jira mode: "autodev run CV-123" (or a browse URL) — resolve the ticket into the
   // requirement before anything else, so spec matching and slug use the real summary.
   const jiraKey = issueRef ? null : parseJiraRef(requirement);
@@ -168,7 +186,7 @@ if (cmd === 'run') {
     // and without it they each re-pick the highest-numbered directory instead (FR-019).
     spec_dir: adoptedSpec, stage: adoptedSpec ? 2 : 1 });
   const nnn = String(id).padStart(3, '0');
-  const branch = branchArg || `${repoConfig(repoPath).branchPrefix || 'autodev'}/${nnn}-${slug}`;
+  const branch = branchArg || `${cfg.branchPrefix || 'autodev'}/${nnn}-${slug}`;
   const wtRoot = process.env.AUTODEV_WORKTREES || join(homedir(), 'worktrees');
   const worktree = join(wtRoot, repo, `run-${nnn}`);
   mkdirSync(dirname(worktree), { recursive: true });
