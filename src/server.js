@@ -115,8 +115,9 @@ export async function startServer({ port = PORT(), dbPath } = {}) {
         updateRun(db, run.id, { stage, status: 'RUNNING', blocked_reason: null });
         mkdirSync(runDir(run.id), { recursive: true });
         const log = openSync(join(runDir(run.id), 'runner.log'), 'a');
+        // windowsHide: no-op on this detached launch; see bin/autodev.js ensureServer. Kept for the uniform invariant.
         spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), 'runner.js'), String(run.id), '--resume'],
-          { detached: true, stdio: ['ignore', log, log], env: process.env }).unref();
+          { detached: true, stdio: ['ignore', log, log], env: process.env, windowsHide: true }).unref();
         return json(200, { ok: true, stage });
       }
       // Skip: bypass a stage without running it. Records it as skipped; if it's the current
@@ -152,7 +153,7 @@ export async function startServer({ port = PORT(), dbPath } = {}) {
         if (fields.status === 'RUNNING') { // resumed past the skipped current stage — relaunch the runner
           const log = openSync(join(runDir(run.id), 'runner.log'), 'a');
           spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), 'runner.js'), String(run.id), '--resume'],
-            { detached: true, stdio: ['ignore', log, log], env: process.env }).unref();
+            { detached: true, stdio: ['ignore', log, log], env: process.env, windowsHide: true }).unref();
         }
         return json(200, { ok: true, skipped: fields.skipped, stage: fields.stage ?? run.stage });
       }

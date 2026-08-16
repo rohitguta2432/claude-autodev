@@ -7,7 +7,7 @@ import { detectTestCmd } from './stages.js';
 import { repoConfig } from './config.js';
 
 const ver = (bin, args = ['--version']) => {
-  try { return execFileSync(bin, args, { encoding: 'utf8', timeout: 10_000 }).trim().split('\n')[0]; }
+  try { return execFileSync(bin, args, { encoding: 'utf8', timeout: 10_000, windowsHide: true }).trim().split('\n')[0]; }
   catch { return null; }
 };
 
@@ -39,7 +39,7 @@ export async function doctor(repoPath = process.cwd()) {
     'install https://cli.github.com/ and `gh auth login` — without it the Push stage cannot open a PR', 'warn');
 
   let head = null;
-  try { head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoPath, encoding: 'utf8', timeout: 10_000 }).trim(); }
+  try { head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoPath, encoding: 'utf8', timeout: 10_000, windowsHide: true }).trim(); }
   catch { /* not a repo or zero commits */ }
   add(!!head, 'target is a git repo with a commit', head ? `HEAD ${head.slice(0, 7)} (${repoPath})` : `no resolvable HEAD in ${repoPath}`,
     'run from a git repo with at least one commit, or pass --repo <path>');

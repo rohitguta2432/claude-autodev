@@ -17,7 +17,7 @@ const fs = require('node:fs');
 const cp = require('node:child_process');
 const p = String(process.argv[3] ?? '');
 ${callsFile ? `fs.appendFileSync(${JSON.stringify(callsFile)}, p.slice(0, 60) + '\\n');` : ''}
-const git = (...a) => cp.execFileSync('git', a, { stdio: 'ignore' });
+const git = (...a) => cp.execFileSync('git', a, { stdio: 'ignore', windowsHide: true });
 const commitAll = (m) => { git('add', '-A'); git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', m); };
 if (p.includes('autodev-specs')) {
   fs.mkdirSync('specs/001-x/checklists', { recursive: true });
@@ -51,11 +51,11 @@ export async function selftest() {
   writeFileSync(stub, pipelineStubJs());
   process.env.AUTODEV_CLAUDE_BIN = stub;
 
-  const git = (cwd, ...cmds) => { for (const a of cmds) execFileSync('git', a, { cwd, stdio: 'pipe' }); };
+  const git = (cwd, ...cmds) => { for (const a of cmds) execFileSync('git', a, { cwd, stdio: 'pipe', windowsHide: true }); };
   const commit = (m) => ['-c', 'user.email=selftest@autodev', '-c', 'user.name=selftest', 'commit', '-q', '-m', m];
   const origin = join(tmp, 'origin'); const wt = join(tmp, 'repo');
-  execFileSync('git', ['init', '-q', '--bare', origin]);
-  execFileSync('git', ['init', '-q', wt]);
+  execFileSync('git', ['init', '-q', '--bare', origin], { windowsHide: true });
+  execFileSync('git', ['init', '-q', wt], { windowsHide: true });
   git(wt, commit('init').concat('--allow-empty'), ['remote', 'add', 'origin', origin], ['checkout', '-qb', 'autodev/001-selftest']);
   writeFileSync(join(wt, 'package.json'), JSON.stringify({ scripts: { test: 'node -e ""' } }));
   git(wt, ['add', '-A'], commit('pkg'));
@@ -66,7 +66,7 @@ export async function selftest() {
     branch: 'autodev/001-selftest', requirement: 'selftest fixture run' });
   db.close();
   console.log('driving a fixture repo through all 7 stages with a stubbed claude…');
-  execFileSync(process.execPath, [join(ROOT, 'src/runner.js'), String(id)], { env: process.env, stdio: 'pipe' });
+  execFileSync(process.execPath, [join(ROOT, 'src/runner.js'), String(id)], { env: process.env, stdio: 'pipe', windowsHide: true });
 
   const db2 = openDb();
   const run = getRun(db2, id);
