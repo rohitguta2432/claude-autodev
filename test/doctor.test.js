@@ -28,6 +28,20 @@ test('doctor fails on a non-repo target and the CLI exits non-zero', async () =>
   assert.throws(() => execFileSync('node', ['bin/autodev.js', 'doctor', notRepo], { encoding: 'utf8', stdio: 'pipe' }));
 });
 
+test('doctor warns about untracked build config the worktree will not have, and worktreeCopy resolves it', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'repo-'));
+  git(repo, ['init', '-q'], commit('init', '--allow-empty'));
+  writeFileSync(join(repo, 'local.properties'), 'sdk.dir=x');
+  writeFileSync(join(repo, '.env'), 'A=1');
+  let c = (await doctor(repo)).find(x => x.name === 'build config reaches the worktree');
+  assert.equal(c.severity, 'warn');
+  assert.match(c.detail, /local\.properties/);
+  assert.match(c.detail, /\.env/);
+  writeFileSync(join(repo, '.autodev.json'), JSON.stringify({ worktreeCopy: ['local.properties', '.env'] }));
+  c = (await doctor(repo)).find(x => x.name === 'build config reaches the worktree');
+  assert.equal(c, undefined);
+});
+
 test('autodev run aborts before creating anything when preflight fails', () => {
   const notRepo = mkdtempSync(join(tmpdir(), 'norepo-'));
   assert.throws(() => execFileSync('node', ['bin/autodev.js', 'run', 'x y z', '--repo', notRepo, '--no-spawn'],

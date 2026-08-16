@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { accessSync, constants, mkdirSync } from 'node:fs';
+import { accessSync, constants, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { AUTODEV_HOME, PORT } from './db.js';
@@ -43,6 +43,25 @@ export async function doctor(repoPath = process.cwd()) {
   catch { /* not a repo or zero commits */ }
   add(!!head, 'target is a git repo with a commit', head ? `HEAD ${head.slice(0, 7)} (${repoPath})` : `no resolvable HEAD in ${repoPath}`,
     'run from a git repo with at least one commit, or pass --repo <path>');
+
+  // Gitignored build config never reaches the fresh worktree a run builds in; an
+  // Android/JVM repo fails its first run on exactly this. Root-level, named files only:
+  // this is a nudge toward worktreeCopy, not a scanner.
+  if (head) {
+    const cfg = repoConfig(repoPath);
+    const copies = new Set(Array.isArray(cfg.worktreeCopy) ? cfg.worktreeCopy : []);
+    const candidates = ['local.properties', '.env', 'gradle.properties', 'debug.keystore', 'keystore.properties']
+      .filter(f => existsSync(join(repoPath, f)) && !copies.has(f));
+    if (candidates.length) {
+      let tracked = [];
+      try { tracked = execFileSync('git', ['ls-files', '--', ...candidates],
+        { cwd: repoPath, encoding: 'utf8', timeout: 10_000 }).split('\n').filter(Boolean); } catch {}
+      const orphans = candidates.filter(f => !tracked.includes(f));
+      if (orphans.length) add(false, 'build config reaches the worktree',
+        `${orphans.join(', ')} exist here but are untracked: a run's fresh worktree will not have them`,
+        'name them in "worktreeCopy" in .autodev.json so kickoff copies them into the worktree', 'warn');
+    }
+  }
 
   const testCmd = repoConfig(repoPath).testCmd || (head ? detectTestCmd(repoPath) : null);
   add(!!testCmd, 'test command detectable', testCmd ?? 'none found',

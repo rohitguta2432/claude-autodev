@@ -186,6 +186,7 @@ it, then switch. autodev has no opinion beyond "the command must exit 0".
 | `the claude CLI is installed but not signed in` (parks at stage 1, after **one** session) | `claude --version` passes while logged out, so `doctor` can't catch this; run `claude` once interactively, then `autodev resume <id>` |
 | `the claude CLI could not be launched` | `claude` isn't on `PATH`; install it or point `AUTODEV_CLAUDE_BIN` at it |
 | `the Claude usage allowance for this account is exhausted` | wait for the reset (or raise the limit), then `autodev resume <id>` |
+| `... exist here but are untracked: a run's fresh worktree will not have them` (`autodev doctor` WARN), or the build fails in the run's worktree with a missing SDK path / `.env` / keystore | name the files it needs in `worktreeCopy` in `.autodev.json`; entries that are already tracked are skipped, since the worktree already has the committed copy |
 
 A parked run's reason names what failed and how to fix it. When one line isn't
 enough, `~/.autodev/runs/<id>/runner.log` holds the failing session's own
@@ -210,6 +211,17 @@ Per-repo `.autodev.json` (committed to the *target* repo):
 | `push` | `false` | never push/PR — caps runs at Verify |
 | `branchPrefix` | `"feature"` | branch naming: `<prefix>/NNN-slug` |
 | `deploy` | `{"merge":true,"cmd":"./deploy.sh"}` | enables stage 8 — see [Deploy](#deploy). Absent = 7-stage pipeline |
+| `worktreeCopy` | `["local.properties", ".env", "debug.keystore"]` | exact files/dirs (typically gitignored) copied from the main repo into each run's fresh worktree at kickoff; entries already tracked in the repo are skipped; see the note below |
+
+A run's worktree contains tracked files only. Builds that need config that is not committed
+(an Android `local.properties` SDK path, `.env`, keystores, `gradle.properties`) name each file
+in `worktreeCopy`; kickoff copies exactly those, skips anything already tracked (the worktree
+already has the committed copy), and `autodev doctor` warns when it spots common ones untracked
+and unlisted. Naming an untracked `.autodev.json` itself makes an uncommitted config effective
+inside the run's worktree (a tracked `.autodev.json` is skipped the same way). Copied files are
+added to the repo's shared `.git/info/exclude` (which also hides them from `git status` in your
+main checkout), so autodev's own sessions cannot commit or push them: they leave the machine
+only if the build itself sends them.
 
 Env vars:
 
