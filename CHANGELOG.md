@@ -52,6 +52,10 @@ pulled the next job. All four are here.
   the daemon-dispatched CLI (git, gh, claude, test and deploy commands) no
   longer open a visible console window each; every launch site in src/ and
   bin/ now passes windowsHide.
+- Windows: the detected gradle test command is now `.\gradlew.bat test` (explicit
+  relative path). A bare `gradlew.bat` never resolves from the worktree when
+  `NoDefaultCurrentDirectoryInExePath=1` is set, and the explicit form works
+  everywhere.
 
 ## Earlier — first green run
 
