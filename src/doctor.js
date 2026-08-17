@@ -55,7 +55,7 @@ export async function doctor(repoPath = process.cwd()) {
     if (candidates.length) {
       let tracked = [];
       try { tracked = execFileSync('git', ['ls-files', '--', ...candidates],
-        { cwd: repoPath, encoding: 'utf8', timeout: 10_000 }).split('\n').filter(Boolean); } catch {}
+        { cwd: repoPath, encoding: 'utf8', timeout: 10_000, windowsHide: true }).split('\n').filter(Boolean); } catch {}
       const orphans = candidates.filter(f => !tracked.includes(f));
       if (orphans.length) add(false, 'build config reaches the worktree',
         `${orphans.join(', ')} exist here but are untracked: a run's fresh worktree will not have them`,

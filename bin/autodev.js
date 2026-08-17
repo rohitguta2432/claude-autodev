@@ -208,7 +208,7 @@ if (cmd === 'run') {
   if (inRepo.length) {
     try {
       tracked = new Set(execFileSync('git', ['ls-files', '--', ...inRepo],
-        { cwd: repoPath, encoding: 'utf8' }).split('\n').filter(Boolean));
+        { cwd: repoPath, encoding: 'utf8', windowsHide: true }).split('\n').filter(Boolean));
     } catch { /* ls-files failing just means nothing is treated as tracked */ }
   }
   for (const rel of copyArr) {
@@ -237,7 +237,7 @@ if (cmd === 'run') {
       // Own catch: a copy that LANDED must never be reported as skipped.
       try {
         const exclude = resolve(worktree, execFileSync('git', ['rev-parse', '--git-path', 'info/exclude'],
-          { cwd: worktree, encoding: 'utf8' }).trim());
+          { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim());
         mkdirSync(dirname(exclude), { recursive: true }); // git init --template= can omit .git/info
         const line = `/${relPosix}`;
         if (!existsSync(exclude) || !readFileSync(exclude, 'utf8').split('\n').includes(line))
