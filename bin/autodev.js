@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, openSync, copyFileSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdirSync, openSync, copyFileSync, readFileSync, writeFileSync, existsSync, rmSync, cpSync, appendFileSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
-import { join, dirname, basename, resolve, relative } from 'node:path';
+import { join, dirname, basename, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { PORT, runDir, openDb, createRun, getRun, listRuns, updateRun, deleteRun, AUTODEV_HOME } from '../src/db.js';
@@ -182,6 +182,73 @@ if (cmd === 'run') {
     deleteRun(db, id); db.close();
     console.error(`git worktree add failed: ${e.message}`);
     process.exit(1);
+  }
+  // A fresh worktree is TRACKED files only, and the build config a repo needs (SDK paths,
+  // .env, keystores; typically gitignored) is exactly what never arrives. worktreeCopy is the
+  // explicit allowlist: entries move because the operator named them, never because a
+  // heuristic found them. Missing entries are noted, not fatal; entries escaping the repo are
+  // refused; entries already tracked are skipped (the worktree already has the committed
+  // copy, and overwriting it would put an uncommitted local change into a branch the run
+  // commits and pushes); a copy that fails degrades to today's behavior rather than aborting
+  // the whole kickoff.
+  // .autodev.json only - no CLI flag, no env var; default [].
+  const copyList = repoConfig(repoPath).worktreeCopy;
+  const copyArr = Array.isArray(copyList) ? copyList : [];
+  // Escape-check before the batched git call: an out-of-repo or empty pathspec makes
+  // `git ls-files` fail outright ("fatal: ... is outside repository"), which would blank
+  // the tracked set for every entry in the batch, not just the offending one.
+  const inRepo = copyArr.filter(rel => {
+    if (isAbsolute(rel)) return false;
+    const relN = relative(repoPath, join(repoPath, rel));
+    return relN && !relN.startsWith('..');
+  // :(literal) so a leading ':' or a '*' in an entry cannot act as pathspec magic and
+  // fail (or over-match) the whole batch; normalized so the key matches ls-files output.
+  }).map(rel => `:(literal)${relative(repoPath, join(repoPath, rel)).replaceAll('\\', '/')}`);
+  let tracked = new Set();
+  if (inRepo.length) {
+    try {
+      tracked = new Set(execFileSync('git', ['ls-files', '--', ...inRepo],
+        { cwd: repoPath, encoding: 'utf8' }).split('\n').filter(Boolean));
+    } catch { /* ls-files failing just means nothing is treated as tracked */ }
+  }
+  for (const rel of copyArr) {
+    const src = join(repoPath, rel);
+    const relN = relative(repoPath, src);
+    if (isAbsolute(rel) || !relN || relN.startsWith('..')) {
+      console.log(`worktreeCopy: ${rel} escapes the repo, skipped`); continue;
+    }
+    // Normalized ('./x' -> 'x', 'sub/' -> 'sub'), matching what ls-files prints: a raw
+    // './x' key would miss the tracked set and reopen the overwrite the skip prevents.
+    const relPosix = relN.replaceAll('\\', '/');
+    if (!existsSync(src)) { console.log(`worktreeCopy: ${rel} not present, skipped`); continue; }
+    if (tracked.has(relPosix) || [...tracked].some(t => t.startsWith(`${relPosix}/`))) {
+      console.log(`worktreeCopy: ${rel} is tracked, the worktree already has it, skipped`); continue;
+    }
+    try {
+      mkdirSync(dirname(join(worktree, rel)), { recursive: true });
+      // dereference: true copies file content, never a live symlink pointer, which could
+      // point outside the repo; it also sidesteps Windows symlink creation needing
+      // privileges a build-config copy should never require.
+      cpSync(src, join(worktree, rel), { recursive: true, dereference: true });
+      // Sessions run `git add -A`, so an unexcluded copy would ride the stage-5 push.
+      // The exclude file is the repo-wide .git/info/exclude (git shares info/ across
+      // worktrees; there is no per-worktree exclude) - same mechanism as the holdout
+      // sequester. Append-once: runs repeat, the exclude list must not grow with them.
+      // Own catch: a copy that LANDED must never be reported as skipped.
+      try {
+        const exclude = resolve(worktree, execFileSync('git', ['rev-parse', '--git-path', 'info/exclude'],
+          { cwd: worktree, encoding: 'utf8' }).trim());
+        mkdirSync(dirname(exclude), { recursive: true }); // git init --template= can omit .git/info
+        const line = `/${relPosix}`;
+        if (!existsSync(exclude) || !readFileSync(exclude, 'utf8').split('\n').includes(line))
+          appendFileSync(exclude, `${line}\n`);
+      } catch (e) {
+        console.log(`worktreeCopy: ${rel} copied but could NOT be git-excluded (${e.code ?? e.message}); git add will see it`);
+      }
+      console.log(`worktreeCopy: ${rel} -> worktree`);
+    } catch (e) {
+      console.log(`worktreeCopy: ${rel} could not be copied (${e.code ?? e.message}), skipped`);
+    }
   }
   updateRun(db, id, { branch, worktree });
   db.close();

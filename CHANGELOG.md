@@ -31,6 +31,14 @@ pulled the next job. All four are here.
   the daemon is safe to restart mid-tick.
 - **`autodev run --issue <n>`** takes the requirement from a GitHub issue and
   records the mapping the daemon reconciles against.
+- **`worktreeCopy`** in `.autodev.json`: exact files (typically gitignored: SDK paths, `.env`,
+  keystores) copied from the main repo into each run's fresh worktree at kickoff, skipping
+  anything already tracked. A `git worktree add` checkout is tracked files only, which is
+  exactly where Android/JVM builds died; the list is an explicit allowlist, no globs and no
+  auto-discovery, so secrets move only because the operator named them. Copies are added to
+  the repo's shared `.git/info/exclude` (hiding them from `git status` in the main checkout
+  too) so autodev's own sessions cannot commit or push them, and `doctor` warns when common
+  build files sit untracked and unlisted.
 
 ### Changed
 - Stage count is now per repo: 7 without a deploy config, 8 with one. `autodev
