@@ -4,7 +4,8 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
-import { STAGES, scheduledStages, findSpecDir, specDirOf, detectTestCmd, specDirFor, isCompleteSpecDir } from '../src/stages.js';
+import { STAGES, scheduledStages, findSpecDir, specDirOf, detectTestCmd, specDirFor, isCompleteSpecDir,
+         markerSubdirs, hasTestSources, untilStage } from '../src/stages.js';
 import { git, commit } from './helpers.js';
 
 function gitRepo() {
@@ -232,4 +233,36 @@ test('push stage opens the PR as a DRAFT — review/test have not run at stage 5
   const run = { branch: 'b', requirement: 'q', jira_key: null, issue_type: null };
   assert.match(STAGES[4].prompt(run), /--draft/);
   assert.match(STAGES[4].prompt(run), /DRAFT pull request/);
+});
+
+test('markerSubdirs finds one-level subdirs with a test marker, skips dotdirs and node_modules', () => {
+  const wt = mkdtempSync(join(tmpdir(), 'ms-'));
+  mkdirSync(join(wt, 'backend'));
+  writeFileSync(join(wt, 'backend', 'pytest.ini'), '');
+  mkdirSync(join(wt, 'frontend'));
+  writeFileSync(join(wt, 'frontend', 'package.json'), JSON.stringify({ scripts: { test: 'x' } }));
+  mkdirSync(join(wt, 'nomarker'));
+  mkdirSync(join(wt, '.git'));
+  mkdirSync(join(wt, 'node_modules'));
+  assert.deepEqual(markerSubdirs(wt).sort(), ['backend', 'frontend']);
+});
+
+test('hasTestSources: root src/test, one-level subdir src/androidTest, or neither', () => {
+  const a = mkdtempSync(join(tmpdir(), 'hts-'));
+  mkdirSync(join(a, 'src', 'test'), { recursive: true });
+  assert.equal(hasTestSources(a), true);
+  const b = mkdtempSync(join(tmpdir(), 'hts-'));
+  mkdirSync(join(b, 'app', 'src', 'androidTest'), { recursive: true });
+  assert.equal(hasTestSources(b), true);
+  const c = mkdtempSync(join(tmpdir(), 'hts-'));
+  mkdirSync(join(c, 'src', 'main'), { recursive: true });
+  assert.equal(hasTestSources(c), false);
+});
+
+test('untilStage precedence: --until row > .autodev.json "until" > "push":false > last scheduled stage', () => {
+  assert.equal(untilStage({}, 3), 3);
+  assert.equal(untilStage({ until: 'analyze' }, null), 2);
+  assert.equal(untilStage({ push: false }, null), 4);
+  assert.equal(untilStage({}, null), 7);
+  assert.equal(untilStage({ deploy: { merge: true } }, null), 8);
 });

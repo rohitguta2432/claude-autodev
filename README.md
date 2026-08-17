@@ -54,7 +54,7 @@ Requirements: Node ≥22.5, `git`, the [Claude Code CLI](https://claude.com/clau
 ```bash
 npm install -g github:rohitguta2432/claude-autodev#v0.2.0   # pin the tag — master moves
 autodev selftest        # ~30s: drives a fixture repo through all 7 stages, no quota spent
-autodev doctor          # preflight: node/git/claude/gh/repo/test-cmd, each with a fix
+autodev doctor          # preflight: node/git/claude/gh/repo/test-cmd/config/account, each with a fix
 autodev install-skill   # optional: packaged skills into ~/.claude/skills/ (--project for repo-local)
 ```
 
@@ -187,6 +187,7 @@ it, then switch. autodev has no opinion beyond "the command must exit 0".
 | `the claude CLI could not be launched` | `claude` isn't on `PATH`; install it or point `AUTODEV_CLAUDE_BIN` at it |
 | `the Claude usage allowance for this account is exhausted` | wait for the reset (or raise the limit), then `autodev resume <id>` |
 | `... exist here but are untracked: a run's fresh worktree will not have them` (`autodev doctor` WARN), or the build fails in the run's worktree with a missing SDK path / `.env` / keystore | name the files it needs in `worktreeCopy` in `.autodev.json`; entries that are already tracked are skipped, since the worktree already has the committed copy |
+| `.autodev.json` seems ignored (`maxCostUsd` not enforced, `push: false` not honored) | runs read the committed copy in the run worktree; an untracked or uncommitted config never arrives there. Commit it; `autodev doctor` warns about this |
 
 A parked run's reason names what failed and how to fix it. When one line isn't
 enough, `~/.autodev/runs/<id>/runner.log` holds the failing session's own
@@ -206,7 +207,7 @@ Per-repo `.autodev.json` (committed to the *target* repo):
 | `testCmd` | `"cd backend && pytest -q"` | Test-stage command when detection isn't enough |
 | `model` | `"claude-sonnet-5"` | model for every stage session |
 | `stageModels` | `{"review": "claude-opus-4-8"}` | per-stage override (keys: spec, analyze, implement, verify, push, review, test) |
-| `maxCostUsd` | `10` | park the run before any session beyond this budget |
+| `maxCostUsd` | `10` | park the run before any session beyond this budget (checked before each session starts, so real spend can overshoot by up to one session) |
 | `until` | `"analyze"` | always stop after this stage |
 | `push` | `false` | never push/PR — caps runs at Verify |
 | `branchPrefix` | `"feature"` | branch naming: `<prefix>/NNN-slug` |
@@ -250,7 +251,8 @@ subscription login draws on your subscription limits, while an
   `.autodev.json` — `{"stageModels": {"implement": "claude-sonnet-5"}, "model": "claude-sonnet-5"}`
   (per-stage > repo-wide > env).
 - Hard ceiling: `{"maxCostUsd": 10}` in `.autodev.json` parks the run before
-  any session that would start beyond the budget; raise it and `autodev resume`.
+  any session that would start beyond the budget; raise it and `autodev resume`;
+  the ceiling is checked pre-session, so the final session can overshoot it.
 
 ## Smart spec detection
 

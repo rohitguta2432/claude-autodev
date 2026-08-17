@@ -413,3 +413,41 @@ test('usage names the new commands', () => {
   const out = execFileSync('node', ['bin/autodev.js'], { encoding: 'utf8' });
   for (const c of ['init', 'daemon', '--issue', '--auto-accept']) assert.match(out, new RegExp(c.replace(/[-]/g, '\\-')));
 });
+
+test('run kickoff warns what will leave the machine by default, and --no-push suppresses it', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'repo-'));
+  git(repo, ['init', '-q', '-b', 'main'], commit('init', '--allow-empty'));
+  const out = execFileSync('node', ['bin/autodev.js', 'run', 'kickoff warn probe', '--repo', repo, '--no-spawn'], { encoding: 'utf8' });
+  assert.match(out, /will push a branch and open a draft PR/);
+
+  const repo2 = mkdtempSync(join(tmpdir(), 'repo-'));
+  git(repo2, ['init', '-q', '-b', 'main'], commit('init', '--allow-empty'));
+  const out2 = execFileSync('node', ['bin/autodev.js', 'run', 'kickoff warn probe two', '--repo', repo2, '--no-spawn', '--no-push'], { encoding: 'utf8' });
+  assert.doesNotMatch(out2, /will push a branch/);
+});
+
+test('run kickoff names MERGE and deploy when .autodev.json configures deploy', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'repo-'));
+  git(repo, ['init', '-q', '-b', 'main'], commit('init', '--allow-empty'));
+  writeFileSync(join(repo, '.autodev.json'), JSON.stringify({ deploy: { merge: true } }));
+  git(repo, ['add', '-A'], commit('deploy cfg'));
+  const out = execFileSync('node', ['bin/autodev.js', 'run', 'deploy kickoff probe', '--repo', repo, '--no-spawn'], { encoding: 'utf8' });
+  assert.match(out, /MERGE that PR and deploy/);
+});
+
+test('run kickoff prints no warn when .autodev.json caps the run at push:false', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'repo-'));
+  git(repo, ['init', '-q', '-b', 'main'], commit('init', '--allow-empty'));
+  writeFileSync(join(repo, '.autodev.json'), JSON.stringify({ push: false }));
+  git(repo, ['add', '-A'], commit('push false cfg'));
+  const out = execFileSync('node', ['bin/autodev.js', 'run', 'no push kickoff probe', '--repo', repo, '--no-spawn'], { encoding: 'utf8' });
+  assert.doesNotMatch(out, /will push a branch/);
+});
+
+test('an uncommitted push:false does not silence the kickoff warn: the cap comes from HEAD, not the working tree', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'repo-'));
+  git(repo, ['init', '-q', '-b', 'main'], commit('init', '--allow-empty'));
+  writeFileSync(join(repo, '.autodev.json'), JSON.stringify({ push: false })); // uncommitted
+  const out = execFileSync('node', ['bin/autodev.js', 'run', 'uncommitted push false probe', '--repo', repo, '--no-spawn'], { encoding: 'utf8' });
+  assert.match(out, /will push a branch and open a draft PR/);
+});
