@@ -39,6 +39,12 @@ pulled the next job. All four are here.
 - The draft PR is marked ready at the end of stage 7 instead of after the run, so
   the deploy stage has a non-draft PR to merge.
 
+### Fixed
+- Windows: child processes launched from the console-less detached runner and
+  the daemon-dispatched CLI (git, gh, claude, test and deploy commands) no
+  longer open a visible console window each; every launch site in src/ and
+  bin/ now passes windowsHide.
+
 ## Earlier — first green run
 
 The first-green-run release: everything here exists because the pipeline had

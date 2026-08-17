@@ -79,7 +79,7 @@ export function detectTestCmd(dir) {
   return null; // caller decides: runner PARKS on null rather than passing a suite it never ran
 }
 
-const git = (wt, cmd) => execSync(`git ${cmd}`, { cwd: wt, encoding: 'utf8' });
+const git = (wt, cmd) => execSync(`git ${cmd}`, { cwd: wt, encoding: 'utf8', windowsHide: true });
 const need = (cond, msg) => { if (!cond) throw new Error(msg); };
 
 // The spec directory THIS run owns — the single resolver every consumer must use.

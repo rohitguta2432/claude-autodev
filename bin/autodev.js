@@ -27,7 +27,10 @@ async function ensureServer() {
     // process.execPath, never a bare 'node': autodev needs >=22.5 for node:sqlite, and the
     // interpreter already running us is the only one known to satisfy that. A PATH 'node' that
     // is missing or too old dies into the log and leaves the run RUNNING forever.
-    spawn(process.execPath, [join(ROOT, 'src/server.js')], { detached: true, stdio: ['ignore', log, log] }).unref();
+    // windowsHide on every launch (see the structural test in cli.test.js): on a detached
+    // child it is a no-op (DETACHED_PROCESS owns no console), but console children launched
+    // FROM these console-less processes each get a fresh visible console window without it.
+    spawn(process.execPath, [join(ROOT, 'src/server.js')], { detached: true, stdio: ['ignore', log, log], windowsHide: true }).unref();
   }
 }
 
@@ -62,7 +65,7 @@ repos and requirements you'd trust an unsupervised agent with.`;
 function spawnRunner(id, extra = []) {
   const log = openSync(join(runDir(id), 'runner.log'), 'a');
   spawn(process.execPath, [join(ROOT, 'src/runner.js'), String(id), ...extra],
-    { detached: true, stdio: ['ignore', log, log], env: process.env }).unref();
+    { detached: true, stdio: ['ignore', log, log], env: process.env, windowsHide: true }).unref();
 }
 
 // ponytail: the brief's one-liner (`rest.filter(...)`) mis-parses `--repo <path>` —
@@ -174,7 +177,7 @@ if (cmd === 'run') {
   const wtAddArgs = branchArg
     ? ['worktree', 'add', worktree, branch]
     : ['worktree', 'add', '-b', branch, worktree];
-  try { execFileSync('git', wtAddArgs, { cwd: repoPath }); }
+  try { execFileSync('git', wtAddArgs, { cwd: repoPath, windowsHide: true }); }
   catch (e) { // a failed kickoff must leave no ghost row behind — same as before the reserve
     deleteRun(db, id); db.close();
     console.error(`git worktree add failed: ${e.message}`);
@@ -237,7 +240,7 @@ nobody is watching.
 } else if (cmd === 'daemon') {
   const arg = (flag, dflt) => { const i = rest.indexOf(flag); return i === -1 ? dflt : rest[i + 1]; };
   const repoPath = resolve(arg('--repo', process.cwd()));
-  try { execFileSync('git', ['rev-parse', '--git-dir'], { cwd: repoPath, stdio: 'ignore' }); }
+  try { execFileSync('git', ['rev-parse', '--git-dir'], { cwd: repoPath, stdio: 'ignore', windowsHide: true }); }
   catch { console.error(`not a git repository: ${repoPath}`); process.exit(1); }
   await ensureConsent(); // the daemon starts runs unattended — consent cannot be deferred to one
   await ensureServer();
@@ -276,7 +279,7 @@ nobody is watching.
   if (run.pid) {
     if (process.platform === 'win32') {
       // negative-PID group kill is POSIX-only; taskkill /T fells the whole process tree
-      try { execFileSync('taskkill', ['/pid', String(run.pid), '/T', '/F'], { stdio: 'ignore' }); } catch {}
+      try { execFileSync('taskkill', ['/pid', String(run.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }); } catch {}
     } else {
       try { process.kill(-run.pid, 'SIGTERM'); }
       catch { try { process.kill(run.pid); } catch {} }

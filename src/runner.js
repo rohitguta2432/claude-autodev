@@ -87,7 +87,7 @@ function runClaude(prompt, stageN) {
     // attaches it to the thrown error below. Piping would trade the first away for nothing.
     raw = execFileSync(file, argv, {
       cwd: run.worktree, encoding: 'utf8', timeout: CFG.stageTimeoutMin * 60_000,
-      maxBuffer: MAX_BUFFER,
+      maxBuffer: MAX_BUFFER, windowsHide: true,
       env: { ...process.env, AUTODEV_RUN: String(runId), AUTODEV_RUN_DIR: ctx.runDir,
         AUTODEV_PORT: String(ctx.port), AUTODEV_STAGE: String(stageN) },
     });
@@ -190,7 +190,7 @@ async function deployStage(stage) {
     await ev({ type: 'activity', stage: stage.n, detail: `merging ${pr} (--${strategy})` });
     try {
       execFileSync('gh', ['pr', 'merge', pr, `--${strategy}`, '--delete-branch'],
-        { cwd: run.worktree, encoding: 'utf8', timeout: 120_000 });
+        { cwd: run.worktree, encoding: 'utf8', timeout: 120_000, windowsHide: true });
     } catch (e) {
       throw Object.assign(new Error(`gh pr merge failed: ${causeLine(`${e.stdout ?? ''}\n${e.stderr ?? ''}`, 200) || e.message}`), { final: true });
     }
@@ -201,7 +201,7 @@ async function deployStage(stage) {
     // committed .autodev.json and needs pipes and && to be useful. Nothing model-generated
     // or run-derived is interpolated into it.
     try {
-      const out = execSync(d.cmd, { cwd: run.repo_path, encoding: 'utf8', timeout: CFG.stageTimeoutMin * 60_000 });
+      const out = execSync(d.cmd, { cwd: run.repo_path, encoding: 'utf8', timeout: CFG.stageTimeoutMin * 60_000, windowsHide: true });
       writeFileSync(join(ctx.runDir, 'deploy-output.txt'), out);
     } catch (e) {
       const out = `${e.stdout ?? ''}\n${e.stderr ?? ''}`;
@@ -243,7 +243,7 @@ async function testStage(stage) {
   mkdirSync(join(run.worktree, '.autodev'), { recursive: true });
   for (let attempt = 0; ; attempt++) {
     try {
-      const out = execSync(cmd, { cwd: run.worktree, encoding: 'utf8', timeout: CFG.stageTimeoutMin * 60_000 });
+      const out = execSync(cmd, { cwd: run.worktree, encoding: 'utf8', timeout: CFG.stageTimeoutMin * 60_000, windowsHide: true });
       writeFileSync(join(run.worktree, '.autodev/test-output.txt'), out); run._testsPassed = true;
       break;
     } catch (e) {
@@ -346,7 +346,7 @@ for (const stage of PIPELINE.filter(s => s.n >= run.stage && s.n <= until && !sk
     const pr = getRun(db, runId).pr_url;
     if (pr) {
       try {
-        execFileSync('gh', ['pr', 'ready', pr], { cwd: run.worktree, encoding: 'utf8', timeout: 30_000 });
+        execFileSync('gh', ['pr', 'ready', pr], { cwd: run.worktree, encoding: 'utf8', timeout: 30_000, windowsHide: true });
         await ev({ type: 'activity', stage: stage.n, detail: 'draft PR marked ready for review' });
       } catch {
         await ev({ type: 'activity', stage: stage.n, detail: 'could not mark PR ready (gh missing or not a draft) — check it manually' });

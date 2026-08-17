@@ -257,6 +257,31 @@ test('no launch site spawns a bare "node" — the interpreter must come from pro
   assert.deepEqual(offenders, [], `spawn a bare "node" at: ${offenders.join(', ')}`);
 });
 
+test('every child-process launch in src/ and bin/ hides its Windows console', () => {
+  // A console child of a console-less parent (detached runner/server, daemon-dispatched
+  // CLI) gets a fresh VISIBLE console window per launch on Windows; windowsHide is what
+  // suppresses it (and is a no-op both on POSIX and on the detached spawns themselves).
+  // Count-based on purpose: an options object with nested braces defeats a block regex.
+  // test/ is out of scope: its detached launches are console-less and their children
+  // inherit the hidden console. Only the sync APIs are counted (db.exec would collide);
+  // the import scan below turns an unaudited async API into a failure, not silence.
+  const offenders = [];
+  for (const dir of ['src', 'bin']) {
+    for (const f of readdirSync(dir).filter(f => f.endsWith('.js'))) {
+      const body = readFileSync(join(dir, f), 'utf8');
+      const launches = (body.match(/\b(?:spawn|spawnSync|execSync|execFileSync)\s*\(/g) ?? []).length;
+      const hidden = (body.match(/windowsHide:\s*true/g) ?? []).length;
+      if (hidden < launches) offenders.push(`${dir}/${f}: ${launches} launch site(s), ${hidden} windowsHide`);
+      const imported = body.match(/import\s*\{([^}]*)\}\s*from\s*['"]node:child_process['"]/)?.[1] ?? '';
+      for (const api of imported.split(',').map(s => s.trim()).filter(Boolean)) {
+        if (!['spawn', 'spawnSync', 'execSync', 'execFileSync'].includes(api))
+          offenders.push(`${dir}/${f}: unaudited child_process API ${api}`);
+      }
+    }
+  }
+  assert.deepEqual(offenders, [], `launch sites missing windowsHide: ${offenders.join(' | ')}`);
+});
+
 test('the runner still starts when PATH offers no usable node', async () => {
   const repo = mkdtempSync(join(tmpdir(), 'repo-nopath-'));
   git(repo, ['init', '-q', '-b', 'main'], commit('init', '--allow-empty'));
