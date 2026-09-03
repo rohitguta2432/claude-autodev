@@ -322,7 +322,11 @@ const resumeSeed = resume ? run.blocked_reason : null;
 if (resume) { saveState({ status: 'RUNNING', blocked_reason: null }); await ev({ type: 'resumed', stage: run.stage }); }
 saveState({ pid: process.pid });
 
-const skipped = skippedSet(run); // stages the user skipped from the dashboard — bypassed here too
+// Stages bypassed for this run: dashboard/--skip picks on the run row, plus the repo's
+// standing .autodev.json "skip" list (stage names or numbers) — a repo that finds a stage
+// too slow can retire it for every run without remembering a flag.
+const skipped = skippedSet(run);
+for (const s of cfg.skip ?? []) { const n = stageN(s); if (n) skipped.add(n); }
 // Snapshot taken before any stage runs, so the spec stage's creation can be identified by diff.
 const specsBefore = new Set(specDirs(run.worktree));
 // Before the spec session can commit them: holdout scenarios must never enter git, or the

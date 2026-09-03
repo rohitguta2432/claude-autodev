@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 // Per-repo .autodev.json (checked into the target repo, not autodev itself).
 // Precedence everywhere: CLI flag > .autodev.json > env var > built-in default.
-// Recognized keys: testCmd, model, stageModels, effort, stageEffort, until, push, branchPrefix, deploy.
+// Recognized keys: testCmd, model, stageModels, effort, stageEffort, until, push, branchPrefix, deploy, skip.
 export function repoConfig(repoPath) {
   try { return JSON.parse(readFileSync(join(repoPath, '.autodev.json'), 'utf8')); }
   catch { return {}; }
