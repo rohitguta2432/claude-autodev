@@ -174,6 +174,31 @@ unsupervised session can make things materially worse.
 For zero-downtime, put a blue-green flip in `cmd`: deploy to standby, health-check
 it, then switch. autodev has no opinion beyond "the command must exit 0".
 
+### Proof
+
+Every gate leaves its artifact with the run: after verify, review, test and deploy the runner
+copies `verify.json`, `review.json`, `test-output.txt` (and `holdout.json`,
+`deploy-output.txt` when those ran) into `~/.autodev/runs/<id>/proof/` and records a `proof`
+event naming what it kept. The deploy stage records `merged` (the merge commit) and
+`deployed` (command, exit, seconds) as events too.
+
+A repo can add its own evidence with `proofCmd`:
+
+```json
+{ "deploy": { "merge": true, "cmd": "./deploy.sh", "proofCmd": "./proof.sh" } }
+```
+
+It runs after `cmd`, in the main repo path, with `AUTODEV_PROOF_DIR` and `AUTODEV_RUN` in its
+environment, and must exit 0 and leave at least one file in that directory — a production
+screenshot, a health-check response, a version endpoint's answer. A proof command that fails or
+writes nothing parks the run: a deploy nobody can show is not done.
+
+When the Jira queue closes a ticket, it attaches every file in `proof/` (≤ 10 MiB each), posts
+a comment built from the run's own event log — pull request, merge commit, what was deployed
+and when, the test command, the verdicts, the attached file names — and only then transitions
+the issue. A run that never deployed says "not deployed by autodev" in that comment; an upload
+failure leaves the ticket open for the next tick.
+
 ## Troubleshooting
 
 | symptom | cause / fix |
@@ -209,7 +234,7 @@ Per-repo `.autodev.json` (committed to the *target* repo):
 | `until` | `"analyze"` | always stop after this stage |
 | `push` | `false` | never push/PR — caps runs at Verify |
 | `branchPrefix` | `"feature"` | branch naming: `<prefix>/NNN-slug` |
-| `deploy` | `{"merge":true,"cmd":"./deploy.sh"}` | enables stage 8 — see [Deploy](#deploy). Absent = 7-stage pipeline |
+| `deploy` | `{"merge":true,"cmd":"./deploy.sh","proofCmd":"./proof.sh"}` | enables stage 8 — see [Deploy](#deploy) and [Proof](#proof). Absent = 7-stage pipeline |
 
 Env vars:
 

@@ -144,10 +144,49 @@ test('deploy runs only when configured, and its command decides the run', () => 
     '.autodev.json': JSON.stringify({ deploy: { merge: false, cmd: 'node deploy.js' } }),
     'deploy.js': deployJs,
   });
-  const { run, events } = drive(wt, pipelineStubJs());
+  const { id, run, events } = drive(wt, pipelineStubJs());
   assert.equal(run.status, 'DONE');
   assert.equal(readFileSync(join(wt, 'deployed.txt'), 'utf8'), 'ok');
   assert.match(events, /"type":"stage_done","stage":8|"stage":8,"type":"stage_done"/);
+  // the gates' artifacts survive with the run, and the deploy is on record as an event
+  for (const f of ['verify.json', 'review.json', 'test-output.txt', 'deploy-output.txt'])
+    assert.ok(existsSync(join(runDir(id), 'proof', f)), `proof/${f} kept`);
+  assert.match(events, /"type":"deployed","stage":8,"detail":"node deploy.js · exit 0 · \d+s"/);
+  assert.match(events, /"type":"proof","stage":8,"detail":"deploy-output.txt"/);
+});
+
+test('a deploy proof command shows its work: its files are kept and the run finishes', () => {
+  const wt = makeRepo({
+    '.autodev.json': JSON.stringify({ deploy: { merge: false, cmd: 'node deploy.js', proofCmd: 'node proof.js' } }),
+    'deploy.js': `require('node:fs').writeFileSync('deployed.txt', 'ok');`,
+    'proof.js': `const fs = require('node:fs'); const p = require('node:path');
+      fs.writeFileSync(p.join(process.env.AUTODEV_PROOF_DIR, 'prod-' + process.env.AUTODEV_RUN + '.png'), 'shot');`,
+  });
+  const { id, run, events } = drive(wt, pipelineStubJs());
+  assert.equal(run.status, 'DONE');
+  assert.equal(readFileSync(join(runDir(id), 'proof', `prod-${id}.png`), 'utf8'), 'shot');
+  assert.match(events, new RegExp(`"type":"proof","stage":8,"detail":"deploy-output.txt, prod-${id}.png"`));
+});
+
+test('a proof command that fails, or leaves nothing behind, parks the run at deploy', () => {
+  const failing = makeRepo({
+    '.autodev.json': JSON.stringify({ deploy: { merge: false, cmd: 'node deploy.js', proofCmd: 'node proof.js' } }),
+    'deploy.js': ``,
+    'proof.js': `console.error('screenshot tool missing'); process.exit(2);`,
+  });
+  const a = drive(failing, pipelineStubJs());
+  assert.equal(a.run.status, 'BLOCKED');
+  assert.equal(a.run.stage, 8);
+  assert.match(a.run.blocked_reason, /proof command failed: screenshot tool missing/);
+
+  const silent = makeRepo({
+    '.autodev.json': JSON.stringify({ deploy: { merge: false, cmd: 'node deploy.js', proofCmd: 'node proof.js' } }),
+    'deploy.js': ``,
+    'proof.js': ``,
+  });
+  const b = drive(silent, pipelineStubJs());
+  assert.equal(b.run.status, 'BLOCKED');
+  assert.match(b.run.blocked_reason, /proof command left no evidence/);
 });
 
 test('a failing deploy parks the run instead of handing an agent the production fix', () => {

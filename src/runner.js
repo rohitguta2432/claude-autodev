@@ -11,6 +11,7 @@ import { parseClaudeResult } from './metrics.js';
 import { causeLine, classify, sessionBlock } from './session.js';
 import { promptPrefix, excludeHoldout, sequesterHoldout, restoreHoldout, clearHoldout,
          hasHoldout, TRIAGE, HOLDOUT_VERDICT } from './guidance.js';
+import { collectProof, proofFiles, proofDir } from './proof.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CFG = { maxRetries: 2, reviewLoops: 3, stageTimeoutMin: 45, budgetHours: 6 };
@@ -179,20 +180,41 @@ async function holdoutStage(stage) {
   }
 }
 
+// What GitHub says about the run's PR — null when gh is missing or the query fails, so a
+// diagnostic read can never be the reason a deploy stage parks.
+function prState(pr) {
+  try {
+    return JSON.parse(execFileSync('gh', ['pr', 'view', pr, '--json', 'state,mergeCommit'],
+      { cwd: run.worktree, encoding: 'utf8', timeout: 30_000 }));
+  } catch { return null; }
+}
+
 // Merge and deploy, executed by the runner rather than a session. Config lives in the target
-// repo's .autodev.json: {"deploy": {"merge": true, "strategy": "squash", "cmd": "./deploy.sh"}}.
+// repo's .autodev.json:
+//   {"deploy": {"merge": true, "strategy": "squash", "cmd": "./deploy.sh", "proofCmd": "./proof.sh"}}
+// Every step it takes is recorded as an event (merged, deployed, proof) — the ticket close is
+// built from those events, never from a sentence this code could write regardless of outcome.
 async function deployStage(stage) {
   const d = cfg.deploy || {};
   if (d.merge !== false) {
     const pr = getRun(db, runId).pr_url;
     if (!pr) throw Object.assign(new Error('deploy needs a merged PR but no PR was opened (push stage skipped?)'), { final: true });
     const strategy = ['squash', 'merge', 'rebase'].includes(d.strategy) ? d.strategy : 'squash';
-    await ev({ type: 'activity', stage: stage.n, detail: `merging ${pr} (--${strategy})` });
-    try {
-      execFileSync('gh', ['pr', 'merge', pr, `--${strategy}`, '--delete-branch'],
-        { cwd: run.worktree, encoding: 'utf8', timeout: 120_000 });
-    } catch (e) {
-      throw Object.assign(new Error(`gh pr merge failed: ${causeLine(`${e.stdout ?? ''}\n${e.stderr ?? ''}`, 200) || e.message}`), { final: true });
+    // Idempotent on resume: a run parked after the merge (deploy or proof failed) must not
+    // fail again on "pull request already merged" when the operator resumes it.
+    const before = prState(pr);
+    if (before?.state === 'MERGED') {
+      await ev({ type: 'merged', stage: stage.n, detail: `${before.mergeCommit?.oid?.slice(0, 12) ?? 'commit unknown'} (already merged before this attempt)` });
+    } else {
+      await ev({ type: 'activity', stage: stage.n, detail: `merging ${pr} (--${strategy})` });
+      try {
+        execFileSync('gh', ['pr', 'merge', pr, `--${strategy}`, '--delete-branch'],
+          { cwd: run.worktree, encoding: 'utf8', timeout: 120_000 });
+      } catch (e) {
+        throw Object.assign(new Error(`gh pr merge failed: ${causeLine(`${e.stdout ?? ''}\n${e.stderr ?? ''}`, 200) || e.message}`), { final: true });
+      }
+      const after = prState(pr);
+      await ev({ type: 'merged', stage: stage.n, detail: `${after?.mergeCommit?.oid?.slice(0, 12) ?? 'commit unknown'} via gh pr merge --${strategy}` });
     }
   }
   if (d.cmd) {
@@ -200,6 +222,7 @@ async function deployStage(stage) {
     // Shell string by design, exactly like testCmd: it is written by the repo's owner in a
     // committed .autodev.json and needs pipes and && to be useful. Nothing model-generated
     // or run-derived is interpolated into it.
+    const t0 = Date.now();
     try {
       const out = execSync(d.cmd, { cwd: run.repo_path, encoding: 'utf8', timeout: CFG.stageTimeoutMin * 60_000 });
       writeFileSync(join(ctx.runDir, 'deploy-output.txt'), out);
@@ -210,6 +233,29 @@ async function deployStage(stage) {
       // pipeline where another unsupervised session can make things materially worse.
       throw Object.assign(new Error(`deploy command failed: ${causeLine(out, 200)}`), { final: true });
     }
+    await ev({ type: 'deployed', stage: stage.n, detail: `${d.cmd} · exit 0 · ${Math.round((Date.now() - t0) / 1000)}s` });
+  }
+  if (d.proofCmd) {
+    // The repo shows its own work: a screenshot, a health check, a version endpoint — whatever
+    // proves the deploy to the person reading the ticket. Same trust class as cmd. It has to
+    // leave a file behind; a proof command that produces nothing is a failed gate, not a pass.
+    // ponytail: a resume after a proof failure re-runs the deploy command as well — a redeploy
+    // of the same commit, harmless but slow; telling the two failures apart is not worth a flag.
+    const dir = proofDir(ctx.runDir);
+    mkdirSync(dir, { recursive: true });
+    const had = new Set(proofFiles(ctx.runDir).map(f => f.name));
+    await ev({ type: 'activity', stage: stage.n, detail: `proof: ${d.proofCmd}` });
+    try {
+      const out = execSync(d.proofCmd, { cwd: run.repo_path, encoding: 'utf8', timeout: CFG.stageTimeoutMin * 60_000,
+        env: { ...process.env, AUTODEV_PROOF_DIR: dir, AUTODEV_RUN: String(runId) } });
+      writeFileSync(join(ctx.runDir, 'proof-output.txt'), out);
+    } catch (e) {
+      const out = `${e.stdout ?? ''}\n${e.stderr ?? ''}`;
+      writeFileSync(join(ctx.runDir, 'proof-output.txt'), out);
+      throw Object.assign(new Error(`proof command failed: ${causeLine(out, 200) || d.proofCmd}`), { final: true });
+    }
+    if (!proofFiles(ctx.runDir).some(f => !had.has(f.name)))
+      throw Object.assign(new Error(`proof command left no evidence in ${dir}: ${d.proofCmd}`), { final: true });
   }
   run._deployed = true;
 }
@@ -283,6 +329,9 @@ for (const stage of PIPELINE.filter(s => s.n >= run.stage && s.n <= until && !sk
   if (Date.now() - started > CFG.budgetHours * 3_600_000) await park(stage, new Error('wall-clock budget exceeded'));
   saveState({ stage: stage.n });
   await ev({ type: 'stage_started', stage: stage.n, detail: stage.title });
+  // What proof/ held before this stage — the diff afterwards is what the stage contributed,
+  // including files a deploy proof command wrote there itself.
+  const proofBefore = new Set(proofFiles(ctx.runDir).map(f => f.name));
   // Only the stage being resumed is seeded, and only its first attempt: `lastErr` is
   // re-declared per stage, so nothing carries into the stages after it (FR-017).
   let lastErr = resumeSeed && stage.n === run.stage ? { message: resumeSeed } : null;
@@ -316,6 +365,11 @@ for (const stage of PIPELINE.filter(s => s.n >= run.stage && s.n <= until && !sk
     }
   }
   if (!ok) await park(stage, lastErr, lastOut);
+  // Keep the gate's artifact with the run. The worktree is disposable; the evidence that the
+  // ticket is closed on is not, and only copies of files the runner itself checked go in.
+  collectProof({ runDir: ctx.runDir, worktree: run.worktree, stageKey: stage.key });
+  const proofAdded = proofFiles(ctx.runDir).map(f => f.name).filter(n => !proofBefore.has(n));
+  if (proofAdded.length) await ev({ type: 'proof', stage: stage.n, detail: proofAdded.join(', ') });
   // Pin the spec the moment stage 1 has produced one, so stages 2-4 target the directory THIS
   // run owns rather than re-picking the highest-numbered one — which, in a repo whose specs/
   // grows underneath a long run, may belong to somebody else's run entirely (FR-020).

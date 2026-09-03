@@ -32,6 +32,14 @@ pulled the next job. All four are here.
 - **`autodev run --issue <n>`** takes the requirement from a GitHub issue and
   records the mapping the daemon reconciles against.
 
+- **Proof of shipping.** The runner keeps each gate's artifact under
+  `runs/<id>/proof/` and records `merged`, `deployed` and `proof` events; the
+  deploy stage skips an already-merged PR on resume and accepts a `proofCmd`
+  that must leave evidence behind. The Jira queue closes a ticket by attaching
+  that evidence, posting a comment derived from the event log, and only then
+  transitioning — and says "not deployed by autodev" when nothing was.
+  (specs/002-proof-of-shipping)
+
 ### Changed
 - Stage count is now per repo: 7 without a deploy config, 8 with one. `autodev
   status` and the dashboard's skip-to-finish both read the repo's own pipeline
