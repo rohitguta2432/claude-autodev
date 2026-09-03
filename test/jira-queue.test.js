@@ -126,3 +126,14 @@ test('dispatchPlan starts unseen stories oldest first, bounded by free slots', (
   assert.deepEqual(dispatchPlan({ stories, runs: [{ issue_ref: 'S-1' }], active: 0, maxParallel: 1 }).map(s => s.key), ['S-2']);
   assert.deepEqual(dispatchPlan({ stories, runs: [], active: 1, maxParallel: 1 }), []);
 });
+
+test('overlapping ticks collapse into one — a run cannot be announced twice', async () => {
+  const { server, log, base } = await stubJira();
+  const repo = mkdtempSync(join(tmpdir(), 'repo-'));
+  configure(base, repo);
+  finishedRun(repo, 'SCRUM-47');
+  const [a, b] = await Promise.all([tick(), tick()]);
+  server.close();
+  assert.equal(a, b); // same tick, same result object
+  assert.equal(log.filter(e => e.url.endsWith('/comment')).length, 1);
+});

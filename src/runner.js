@@ -208,14 +208,20 @@ async function deployStage(stage) {
       await ev({ type: 'merged', stage: stage.n, detail: `${before.mergeCommit?.oid?.slice(0, 12) ?? 'commit unknown'} (already merged before this attempt)` });
     } else {
       await ev({ type: 'activity', stage: stage.n, detail: `merging ${pr} (--${strategy})` });
+      // No --delete-branch: gh would try to check out the default branch here, in a worktree
+      // whose branch IS the PR branch while the default branch is checked out in the main
+      // repo — and report that as a failure after the merge already happened. The remote
+      // branch is removed separately below, best-effort; the local one goes with the worktree.
       try {
-        execFileSync('gh', ['pr', 'merge', pr, `--${strategy}`, '--delete-branch'],
+        execFileSync('gh', ['pr', 'merge', pr, `--${strategy}`],
           { cwd: run.worktree, encoding: 'utf8', timeout: 120_000 });
       } catch (e) {
         throw Object.assign(new Error(`gh pr merge failed: ${causeLine(`${e.stdout ?? ''}\n${e.stderr ?? ''}`, 200) || e.message}`), { final: true });
       }
       const after = prState(pr);
       await ev({ type: 'merged', stage: stage.n, detail: `${after?.mergeCommit?.oid?.slice(0, 12) ?? 'commit unknown'} via gh pr merge --${strategy}` });
+      try { execFileSync('git', ['push', 'origin', '--delete', run.branch], { cwd: run.worktree, stdio: 'pipe', timeout: 60_000 }); }
+      catch { await ev({ type: 'activity', stage: stage.n, detail: `remote branch ${run.branch} not deleted — remove it by hand` }); }
     }
   }
   if (d.cmd) {

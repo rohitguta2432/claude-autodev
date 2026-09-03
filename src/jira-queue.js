@@ -169,7 +169,16 @@ function spawnRun(cfg, story, log) {
   child.unref();
 }
 
-export async function tick({ onEvent } = {}) {
+// One tick at a time: the interval timer, a dashboard poll and a run's own finish can all ask
+// for one, and two reconciles reading the same state file would announce a run twice.
+let inFlight = null;
+export function tick(opts) {
+  if (inFlight) return inFlight;
+  inFlight = tickOnce(opts).finally(() => { inFlight = null; });
+  return inFlight;
+}
+
+async function tickOnce({ onEvent } = {}) {
   const cfg = loadConfig();
   const st = loadState();
   const log = (msg) => {
