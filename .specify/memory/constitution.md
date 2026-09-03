@@ -140,8 +140,11 @@ disk is opt-in, with a retention policy decided before it ships.
 - **Isolation**: each run gets its own `git worktree` and branch. The worktree shares `.git`
   with the main checkout and sessions inherit the full environment — the isolation is against
   concurrent file edits, not against credential access, and documentation MUST keep saying so.
-- **Budgets**: bounded retries (2 outer, 3 review⇄fix rounds), a per-stage timeout, a
-  wall-clock run budget, and an optional `maxCostUsd` ceiling. A run parks; it never loops.
+- **Budgets**: bounded retries (2 outer, 3 review⇄fix rounds), a per-stage timeout and a
+  wall-clock run budget. A run parks; it never loops. There is deliberately no cost ceiling
+  (specs/003): spend is reported per stage, never used to stop a run.
+- **Sessions**: every stage session runs `claude-opus-5` at effort `max` unless the precedence
+  chain says otherwise (specs/003).
 - **Consent**: `--dangerously-skip-permissions` requires one-time recorded consent obtained on
   a TTY. Non-interactive invocation without recorded consent MUST refuse.
 

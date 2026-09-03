@@ -6,7 +6,7 @@ import { openDb, getRun, updateRun, runDir, PORT, skippedSet } from './db.js';
 import { emit } from './events.js';
 import { STAGES, scheduledStages, stageN, detectTestCmd, findSpecDir, specDirs,
          holdoutPrompt, holdoutFixPrompt } from './stages.js';
-import { repoConfig, modelFor } from './config.js';
+import { repoConfig, modelFor, effortFor } from './config.js';
 import { parseClaudeResult } from './metrics.js';
 import { causeLine, classify, sessionBlock } from './session.js';
 import { promptPrefix, excludeHoldout, sequesterHoldout, restoreHoldout, clearHoldout,
@@ -64,18 +64,19 @@ function logSession(fields) {
 }
 
 function runClaude(prompt, stageN) {
-  if (cfg.maxCostUsd && costUsd >= cfg.maxCostUsd)
-    throw Object.assign(new Error(
-      `cost budget exceeded: $${costUsd.toFixed(2)} spent >= maxCostUsd $${cfg.maxCostUsd} (.autodev.json) — raise it and resume`), { final: true });
+  // No cost ceiling here — Rohit's call (specs/003): spend is reported per stage by the
+  // metrics events and `autodev cost`, never used to park a run mid-flight.
   const bin = process.env.AUTODEV_CLAUDE_BIN || 'claude';
-  const model = modelFor(cfg, STAGES[stageN - 1]?.key); // per-stage > repo model > env pin
+  const key = STAGES[stageN - 1]?.key;
+  const model = modelFor(cfg, key);   // per-stage > repo model > env pin > claude-opus-5
+  const effort = effortFor(cfg, key); // per-stage > repo effort > env pin > max
   // Factory rules ride on every session, including the review and holdout ones — they are
   // the repo's constraints on unsupervised work, not the builder's alone.
   prompt = promptPrefix(run.worktree) + prompt;
   const args = process.env.AUTODEV_CLAUDE_BIN
     ? ['-p', prompt] // stub in tests
     : ['-p', prompt, '--dangerously-skip-permissions', '--settings', hooksFile, '--output-format', 'json',
-       ...(model ? ['--model', model] : [])];
+       '--model', model, '--effort', effort];
   // A .js AUTODEV_CLAUDE_BIN (test stubs) runs via node — extensionless scripts can't spawn on Windows.
   const [file, argv] = bin.endsWith('.js') ? [process.execPath, [bin, ...args]] : [bin, args];
   const attempt = (sessionSeq.get(stageN) ?? 0) + 1;

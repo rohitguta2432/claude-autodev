@@ -206,7 +206,6 @@ failure leaves the ticket open for the next tick.
 | `no test command detected — pass --test-cmd …` (run parks at stage 7) | detection covers npm/pytest/tox/maven/gradle/go/cargo/make/dotnet at the root and one subdir level; anything else needs `--test-cmd "<cmd>"` or `"testCmd"` in `.autodev.json` |
 | `branch has no upstream — push failed` (parks at stage 5) | the repo has no `origin` remote or no push rights; add one, or run with `--no-push` |
 | `review verdict: REQUEST_CHANGES` after 3 rounds | the review⇄fix loop spent its budget; read `.autodev/review.json` in the worktree, fix or relax, then `autodev resume <id>` |
-| `cost budget exceeded: $… >= maxCostUsd` | raise `maxCostUsd` in `.autodev.json` and `autodev resume <id>` |
 | `no TTY to confirm on — run autodev once interactively` | the skip-permissions consent hasn't been recorded; run any `autodev run` from a terminal once |
 | `the claude CLI is installed but not signed in` (parks at stage 1, after **one** session) | `claude --version` passes while logged out, so `doctor` can't catch this; run `claude` once interactively, then `autodev resume <id>` |
 | `the claude CLI could not be launched` | `claude` isn't on `PATH`; install it or point `AUTODEV_CLAUDE_BIN` at it |
@@ -228,9 +227,10 @@ Per-repo `.autodev.json` (committed to the *target* repo):
 | key | example | effect |
 |-----|---------|--------|
 | `testCmd` | `"cd backend && pytest -q"` | Test-stage command when detection isn't enough |
-| `model` | `"claude-sonnet-5"` | model for every stage session |
+| `model` | `"claude-sonnet-5"` | model for every stage session (default `claude-opus-5`) |
 | `stageModels` | `{"review": "claude-opus-4-8"}` | per-stage override (keys: spec, analyze, implement, verify, push, review, test) |
-| `maxCostUsd` | `10` | park the run before any session beyond this budget |
+| `effort` | `"high"` | effort for every stage session — low, medium, high, xhigh, max (default `max`) |
+| `stageEffort` | `{"push": "low"}` | per-stage effort override, same keys as `stageModels` |
 | `until` | `"analyze"` | always stop after this stage |
 | `push` | `false` | never push/PR — caps runs at Verify |
 | `branchPrefix` | `"feature"` | branch naming: `<prefix>/NNN-slug` |
@@ -240,7 +240,8 @@ Env vars:
 
 | var | default | effect |
 |-----|---------|--------|
-| `AUTODEV_CLAUDE_MODEL` | – | pin a model for every stage session |
+| `AUTODEV_CLAUDE_MODEL` | – | pin a model for every stage session (below `.autodev.json`, above the `claude-opus-5` default) |
+| `AUTODEV_CLAUDE_EFFORT` | – | pin an effort level the same way (default `max`) |
 | `AUTODEV_HOME` | `~/.autodev` | state dir (db, run logs, consent) |
 | `AUTODEV_WORKTREES` | `~/worktrees` | where run worktrees are created |
 | `AUTODEV_PORT` | `4590` | dashboard port |
@@ -259,11 +260,12 @@ subscription login draws on your subscription limits, while an
 
 - `autodev cost <id>` — per-stage sessions/tokens/cost summed from the run's
   metrics events (also visible per stage on the dashboard).
-- Pin cheaper models: `AUTODEV_CLAUDE_MODEL` for everything, or per stage in
-  `.autodev.json` — `{"stageModels": {"implement": "claude-sonnet-5"}, "model": "claude-sonnet-5"}`
-  (per-stage > repo-wide > env).
-- Hard ceiling: `{"maxCostUsd": 10}` in `.autodev.json` parks the run before
-  any session that would start beyond the budget; raise it and `autodev resume`.
+- Every session runs `claude-opus-5` at `--effort max` unless told otherwise. Pin cheaper
+  models or lower effort: `AUTODEV_CLAUDE_MODEL` / `AUTODEV_CLAUDE_EFFORT` for everything,
+  or per stage in `.autodev.json` — `{"stageModels": {"push": "claude-sonnet-5"},
+  "stageEffort": {"push": "low"}}` (per-stage > repo-wide > env > default).
+- There is no cost ceiling. A run finishes or parks on its work — retries, the stage timeout
+  and the wall clock bound it — never on its bill; `autodev cost` is the readout, not a gate.
 
 ## Smart spec detection
 

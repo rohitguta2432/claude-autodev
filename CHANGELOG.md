@@ -40,12 +40,22 @@ pulled the next job. All four are here.
   transitioning — and says "not deployed by autodev" when nothing was.
   (specs/002-proof-of-shipping)
 
+- **`effort` / `stageEffort`** in `.autodev.json` and `AUTODEV_CLAUDE_EFFORT`,
+  passed to every session as `--effort`. (specs/003)
+
 ### Changed
+- Every stage session now defaults to `claude-opus-5` at `--effort max` instead
+  of the `claude` CLI's own default model and effort. (specs/003)
+
 - Stage count is now per repo: 7 without a deploy config, 8 with one. `autodev
   status` and the dashboard's skip-to-finish both read the repo's own pipeline
   rather than a global constant.
 - The draft PR is marked ready at the end of stage 7 instead of after the run, so
   the deploy stage has a non-draft PR to merge.
+
+### Removed
+- `maxCostUsd`. A run is no longer parked on accumulated spend; `autodev cost`
+  and the per-stage metrics remain the readout. (specs/003)
 
 ## Earlier — first green run
 
