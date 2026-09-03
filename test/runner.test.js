@@ -7,6 +7,9 @@ import { execFileSync } from 'node:child_process';
 import { git, commit, stubClaude, pipelineStubJs, failingStubJs, sessionsFrom, repoWithSpecs } from './helpers.js';
 
 process.env.AUTODEV_HOME = mkdtempSync(join(tmpdir(), 'autodev-run-'));
+// Never let a test runner's events reach a live dashboard on 4590: its run ids overlap real
+// ones, and the server applies parked/run_done events straight onto the matching db row.
+process.env.AUTODEV_PORT = '0';
 const { openDb, createRun, getRun, runDir } = await import('../src/db.js');
 
 // Stub claude: reads the -p prompt, fabricates the right artifact per stage keyword.
