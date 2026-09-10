@@ -10,6 +10,16 @@ export function parseJiraRef(s) {
   return m ? m[1] : null;
 }
 
+// The ticket a free-text requirement is *for*, when it names one up front: "SCRUM-75: …",
+// "[CV-77] …", "SCRUM-75 (Bug) …". Distinct from parseJiraRef on purpose — that decides whether
+// to *fetch* the ticket and replace the requirement, so it must stay strict; this only tags the
+// run so a finished deploy has a ticket to close. A key mid-sentence ("fix CV-123 quickly") is
+// still prose: it may name a related ticket, not the one this run ships.
+export function leadingJiraKey(s) {
+  const m = String(s ?? '').trim().match(/^\[?([A-Z][A-Z0-9]+-\d+)\]?(?=$|[\s:,.;)\]—–-])/);
+  return m ? m[1] : null;
+}
+
 const FETCH_PROMPT = (key, cloudId) => `Call the mcp__atlassian-jira__getJiraIssue tool for issue ${key}${cloudId ? ` with cloudId "${cloudId}"` : ''} (fields: summary, description, issuetype, priority). Then output ONLY a JSON object, no prose, no markdown fence:
 {"key":"${key}","type":"<Bug|Story|Task|...>","summary":"...","description":"...(plain text, include acceptance criteria if present)"}
 If the tool is unavailable or errors, output {"error":"<reason>"}.`;

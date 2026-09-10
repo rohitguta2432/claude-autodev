@@ -127,3 +127,26 @@ A proof command that fails or leaves nothing parks the run: a deploy nobody can 
   same stage; the redeploy is harmless and rare. `ponytail:` in `runner.js`.
 - Attachment retries after a partial failure can attach the same file twice. Jira tolerates
   duplicates; a dedupe by name would hide a genuinely new file with the same name.
+
+## Amendment — a hand-started run still closes its ticket (2026-09-10)
+
+Run #9 (`autodev run "SCRUM-75 (Bug, Highest): …"`) exposed two gaps between "the deploy
+stage finished" and "the ticket is Done with proof", both on the queue side of FR-005:
+
+1. **The run had no ticket.** `parseJiraRef` only recognises a *bare* key or browse URL —
+   deliberately, because a match means "fetch the ticket and replace the requirement". A
+   requirement that opens with its key and then states the work inline matched nothing, so
+   `issue_ref` was NULL and `runsForIssues` never saw the run. It would have deployed and the
+   queue would have had nothing to close. `leadingJiraKey` now tags such a run (key at the
+   very start, optionally bracketed, followed by punctuation or the end) without fetching;
+   a key mid-sentence is still prose and still untagged.
+
+2. **Reconcile was gated on dispatch.** The server only ticked on `run_done` when
+   `enabled` was true — but `enabled` governs pulling *new* stories into runs, and the
+   operator keeps it off on purpose. A run that already exists is owed its close regardless.
+   The server now ticks whenever the Jira config is complete, with `reconcileOnly` when
+   dispatch is off: finished runs are attached, commented and transitioned; nothing is
+   started; `/search/jql` is never called.
+
+Neither changes what the queue does for its own kickoffs. `test/cli.test.js` pins the
+tagging end to end, `test/jira-queue.test.js` pins the reconcile-only tick.

@@ -5,7 +5,21 @@ import { stubClaude } from './helpers.js';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { parseJiraRef, fetchIssue } from '../src/jira.js';
+import { parseJiraRef, leadingJiraKey, fetchIssue } from '../src/jira.js';
+
+test('leadingJiraKey: a requirement that opens with its ticket is tagged, prose is not', () => {
+  // The shapes a hand-written `autodev run` actually arrives in.
+  assert.equal(leadingJiraKey('SCRUM-75 (Bug, Highest): heading too large'), 'SCRUM-75');
+  assert.equal(leadingJiraKey('SCRUM-75: heading too large'), 'SCRUM-75');
+  assert.equal(leadingJiraKey('[CV-77] NPE on empty payload'), 'CV-77'); // fetchIssue's own prefix
+  assert.equal(leadingJiraKey('SCRUM-75 — heading too large'), 'SCRUM-75');
+  assert.equal(leadingJiraKey('SCRUM-75'), 'SCRUM-75');
+  // A key inside the sentence may be a *related* ticket; it does not make the run that ticket's.
+  assert.equal(leadingJiraKey('fix CV-123 quickly'), null);
+  assert.equal(leadingJiraKey('add rate limiting to the API'), null);
+  assert.equal(leadingJiraKey('SCRUM-75abc is not a key'), null);
+  assert.equal(leadingJiraKey(''), null);
+});
 
 test('parseJiraRef: keys and browse URLs, rejects free text', () => {
   assert.equal(parseJiraRef('CV-123'), 'CV-123');

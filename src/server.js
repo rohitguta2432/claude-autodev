@@ -1,12 +1,13 @@
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
-import { readFileSync, existsSync, openSync, mkdirSync, appendFileSync } from 'node:fs';
-import { spawn } from 'node:child_process';
+import { readFileSync, existsSync, openSync, mkdirSync, appendFileSync, rmSync } from 'node:fs';
+import { spawn, execFileSync } from 'node:child_process';
 import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { openDb, createRun, getRun, listRuns, updateRun, runDir, PORT, skippedSet } from './db.js';
+import { openDb, createRun, getRun, listRuns, updateRun, deleteRun, runDir, PORT, skippedSet } from './db.js';
 import { specDirOf, STAGES, scheduledStages } from './stages.js';
 import { repoConfig } from './config.js';
+import * as jiraQueue from './jira-queue.js';
 
 const PUB = join(dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
@@ -73,9 +74,29 @@ function badHost(req) {
   return !['127.0.0.1', 'localhost', '[::1]'].includes(hostname);
 }
 
+// Kill a run's whole process tree — the runner is its own group leader and claude runs
+// inside that group, so a bare pid kill would leave claude alive (same logic as CLI stop).
+function killRunTree(run) {
+  if (!run.pid) return;
+  if (process.platform === 'win32') {
+    try { execFileSync('taskkill', ['/pid', String(run.pid), '/T', '/F'], { stdio: 'ignore' }); } catch {}
+  } else {
+    try { process.kill(-run.pid, 'SIGTERM'); }
+    catch { try { process.kill(run.pid); } catch {} }
+  }
+}
+const pidAlive = (pid) => { try { return pid ? (process.kill(pid, 0), true) : false; } catch { return false; } };
+
 export async function startServer({ port = PORT(), dbPath } = {}) {
   const db = openDb(dbPath);
   const clients = new Set();
+  const broadcast = (ev) => { for (const c of clients) c.write(`data: ${JSON.stringify(ev)}\n\n`); };
+  // audit line for the activity feed — appended to the run's jsonl and streamed live
+  const audit = (id, ev) => {
+    mkdirSync(runDir(id), { recursive: true });
+    appendFileSync(join(runDir(id), 'events.jsonl'), JSON.stringify(ev) + '\n');
+    broadcast(ev);
+  };
   // Per-session CSRF token: injected into the served index.html, required on
   // browser-marked mutating requests. Local tooling (CLI/runner — no browser
   // headers) is exempt; a foreign page can neither read the token (SOP) nor
@@ -97,9 +118,88 @@ export async function startServer({ port = PORT(), dbPath } = {}) {
         const ev = { ts: Date.now(), ...await body(req) }; // stamp ts if the poster didn't
         applyEvent(db, ev);
         for (const c of clients) c.write(`data: ${JSON.stringify(ev)}\n\n`);
+        // A run that just ended is reconciled onto its ticket now, not at the next interval:
+        // the runner is waiting on this response, so the tick runs after it, not in it.
+        // Reconcile whenever Jira is reachable, not only when auto-dispatch is on: a run started
+        // by hand still owes its ticket the proof. With dispatch off, close but start nothing.
+        if (['run_done', 'parked', 'rejected'].includes(ev.type)) {
+          const cfg = jiraQueue.loadConfig();
+          if (jiraQueue.configComplete(cfg))
+            setImmediate(() => jiraQueue.tick({ onEvent: broadcast, reconcileOnly: !cfg.enabled })
+              .then(() => jiraQueue.schedule(broadcast)).catch(() => {}));
+        }
         return json(200, { ok: true });
       }
       if (url.pathname === '/api/runs') return json(200, listRuns(db));
+      // The board's columns: the stages this repo actually schedules. Deploy is opt-in
+      // (.autodev.json "deploy"), so a repo without it has a 7-stage pipeline, not 8.
+      if (url.pathname === '/api/stages') {
+        const repo = url.searchParams.get('repo') || jiraQueue.loadConfig().repoPath || '';
+        const cfg = repo ? repoConfig(repo) : {};
+        return json(200, { deploy: Boolean(cfg.deploy), repo,
+          stages: scheduledStages(cfg).map(s => ({ n: s.n, title: s.title })) });
+      }
+      // ---- Jira queue (dashboard-driven; see src/jira-queue.js) ----
+      if (url.pathname === '/api/jira' && req.method === 'GET') return json(200, jiraQueue.queueStatus());
+      if (req.method === 'POST' && url.pathname === '/api/jira/config') {
+        jiraQueue.saveConfig(await body(req));
+        jiraQueue.schedule(broadcast); // interval/enabled may have changed — re-arm from the new config
+        return json(200, jiraQueue.queueStatus());
+      }
+      if (req.method === 'POST' && url.pathname === '/api/jira/tick') {
+        const out = await jiraQueue.tick({ onEvent: broadcast });
+        jiraQueue.schedule(broadcast); // a manual poll restarts the countdown
+        return json(200, { ...out, status: jiraQueue.queueStatus() });
+      }
+      if (url.pathname === '/api/jira/stories' && req.method === 'GET') {
+        try {
+          const cfg = jiraQueue.loadConfig();
+          const stories = await jiraQueue.openStories(cfg);
+          const rows = db.prepare('SELECT id, status, stage, issue_ref FROM runs WHERE repo_path = ? AND issue_ref IS NOT NULL').all(cfg.repoPath);
+          const byKey = new Map(rows.map(r => [String(r.issue_ref), r]));
+          return json(200, stories.map(s => ({ ...s, run: byKey.get(s.key) ?? null })));
+        } catch (e) { return json(400, { error: String(e.message || e) }); }
+      }
+      if (req.method === 'POST' && url.pathname === '/api/jira/clear-state') {
+        jiraQueue.clearState();
+        return json(200, { ok: true });
+      }
+      // Stop: fell the run's process tree, park the run (same semantics as `autodev stop`).
+      const stopM = url.pathname.match(/^\/api\/runs\/(\d+)\/stop$/);
+      if (req.method === 'POST' && stopM) {
+        const run = getRun(db, Number(stopM[1]));
+        if (!run) return json(404, {});
+        killRunTree(run);
+        updateRun(db, run.id, { status: 'BLOCKED', blocked_reason: 'stopped from dashboard' });
+        audit(run.id, { ts: Date.now(), run: run.id, type: 'parked', stage: run.stage, detail: 'stopped from dashboard' });
+        return json(200, { ok: true });
+      }
+      // Clear: stop if alive, then remove the run's worktree, branch, records, and db row.
+      const wipeRun = (run) => {
+        if (pidAlive(run.pid)) killRunTree(run);
+        if (run.worktree) {
+          try { execFileSync('git', ['worktree', 'remove', '--force', run.worktree], { cwd: run.repo_path, stdio: 'ignore' }); }
+          catch { rmSync(run.worktree, { recursive: true, force: true }); }
+        }
+        if (run.branch) { try { execFileSync('git', ['branch', '-D', run.branch], { cwd: run.repo_path, stdio: 'ignore' }); } catch {} }
+        rmSync(runDir(run.id), { recursive: true, force: true });
+        deleteRun(db, run.id);
+        broadcast({ ts: Date.now(), run: run.id, type: 'deleted', detail: `run #${run.id} cleared` });
+      };
+      const delM = url.pathname.match(/^\/api\/runs\/(\d+)\/delete$/);
+      if (req.method === 'POST' && delM) {
+        const run = getRun(db, Number(delM[1]));
+        if (!run) return json(404, {});
+        wipeRun(run);
+        return json(200, { ok: true });
+      }
+      // Clear-all: every run goes — the board and the queue's memory reset to factory-empty.
+      if (req.method === 'POST' && url.pathname === '/api/runs/clear-all') {
+        const all = listRuns(db);
+        for (const run of all) wipeRun(run);
+        jiraQueue.clearState();
+        return json(200, { ok: true, cleared: all.map(r => r.id) });
+      }
       // Jump: restart the pipeline at an arbitrary stage (dashboard "JUMP TO <STAGE>").
       const jm = url.pathname.match(/^\/api\/runs\/(\d+)\/jump$/);
       if (req.method === 'POST' && jm) {
@@ -183,7 +283,9 @@ export async function startServer({ port = PORT(), dbPath } = {}) {
     } catch (e) { json(500, { error: String(e) }); }
   });
   await new Promise(r => server.listen(port, '127.0.0.1', r));
-  return { port: server.address().port, close: () => { for (const c of clients) c.end(); server.close(); db.close(); } };
+  jiraQueue.schedule(broadcast); // arm the Jira queue timer if the saved config enables it
+  return { port: server.address().port,
+    close: () => { jiraQueue.stopTimer(); for (const c of clients) c.end(); server.close(); db.close(); } };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

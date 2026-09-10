@@ -46,7 +46,9 @@ export function saveConfig(patch) {
     if (k === 'apiToken' && patch[k] === '') continue;
     next[k] = patch[k];
   }
-  next.intervalMin = Math.max(1, Number(next.intervalMin) || 15);
+  // Floor is 15s (0.25m), not 1m — a whole-minute poll leaves fresh tickets idling
+  // visibly; Jira's search API is comfortably within rate limits at four polls a minute.
+  next.intervalMin = Math.max(0.25, Number(next.intervalMin) || 15);
   next.maxParallel = Math.max(1, Number(next.maxParallel) || 1);
   next.skipStages = [...new Set((next.skipStages || []).map(Number).filter(n => n >= 1 && n <= 8))].sort((a, b) => a - b);
   mkdirSync(AUTODEV_HOME(), { recursive: true });
@@ -178,7 +180,16 @@ export function tick(opts) {
   return inFlight;
 }
 
-async function tickOnce({ onEvent } = {}) {
+// Whether the queue can talk to Jira at all — the same five fields tickOnce refuses without.
+// Exported so the server can reconcile a finished run whenever Jira is reachable, not only
+// when the dispatch side is switched on.
+export const configComplete = (cfg) =>
+  Boolean(cfg.baseUrl && cfg.email && cfg.apiToken && cfg.project && cfg.repoPath);
+
+// reconcileOnly: close finished runs onto their tickets but start nothing new. Dispatch
+// (pulling open stories into runs) is what "enabled" governs; reconcile is owed to any run
+// that already exists, including one started by hand with `autodev run`.
+async function tickOnce({ onEvent, reconcileOnly = false } = {}) {
   const cfg = loadConfig();
   const st = loadState();
   const log = (msg) => {
@@ -187,7 +198,7 @@ async function tickOnce({ onEvent } = {}) {
   };
   const result = { reconciled: [], started: [], error: null };
   try {
-    if (!cfg.baseUrl || !cfg.email || !cfg.apiToken || !cfg.project || !cfg.repoPath)
+    if (!configComplete(cfg))
       throw new Error('incomplete config — set site, email, token, project and repo');
 
     const db = openDb();
@@ -220,6 +231,12 @@ async function tickOnce({ onEvent } = {}) {
     }
 
     // 2. dispatch — oldest open story first, one kickoff per free slot
+    if (reconcileOnly) {
+      if (!result.reconciled.length) log(`reconcile only — nothing finished, ${active} running`);
+      st.lastTick = Date.now();
+      saveState(st);
+      return result;
+    }
     const stories = await openStories(cfg);
     for (const story of dispatchPlan({ stories, runs, active, maxParallel: cfg.maxParallel })) {
       spawnRun(cfg, story, log);

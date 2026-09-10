@@ -8,7 +8,7 @@ import { homedir } from 'node:os';
 import { PORT, runDir, openDb, createRun, getRun, listRuns, updateRun, deleteRun, AUTODEV_HOME } from '../src/db.js';
 import { emit } from '../src/events.js';
 import { specDirFor, isCompleteSpecDir, STAGES, scheduledStages, stageN } from '../src/stages.js';
-import { parseJiraRef, fetchIssue } from '../src/jira.js';
+import { parseJiraRef, fetchIssue, leadingJiraKey } from '../src/jira.js';
 import { doctor, printChecks } from '../src/doctor.js';
 import { repoConfig } from '../src/config.js';
 
@@ -76,13 +76,20 @@ function parseRunArgs(args) {
   let testCmd = null;
   let until = null;
   let issueRef = null;
+  let plainIssueRef = null; // recorded on the run verbatim, no gh/MCP fetch (jira-queue kickoffs)
+  let skip = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === '--repo') { repoPath = args[++i]; }
     else if (a === '--issue') { issueRef = String(args[++i]).replace(/^#/, ''); }
+    else if (a === '--issue-ref') { plainIssueRef = String(args[++i]); }
     else if (a === '--spec') { specArg = args[++i]; }
     else if (a === '--branch') { branchArg = args[++i]; }
     else if (a === '--test-cmd') { testCmd = args[++i]; }
+    else if (a === '--skip') { // "3,5" or a stage name list — start with these already skipped
+      skip = String(args[++i]).split(',').map(s => stageN(s.trim())).filter(Boolean);
+      if (!skip.length) { console.error(`--skip wants stage numbers or names: ${STAGES.map(s => s.key).join('|')}`); process.exit(1); }
+    }
     else if (a === '--until') {
       until = stageN(args[++i]);
       if (!until) { console.error(`--until wants a stage 1-${STAGES.length} or a name: ${STAGES.map(s => s.key).join('|')}`); process.exit(1); }
@@ -91,15 +98,15 @@ function parseRunArgs(args) {
     else if (a === '--no-spawn') { noSpawn = true; }
     else words.push(a);
   }
-  return { requirement: words.join(' '), repoPath: resolve(repoPath), noSpawn, specArg, branchArg, testCmd, until, issueRef };
+  return { requirement: words.join(' '), repoPath: resolve(repoPath), noSpawn, specArg, branchArg, testCmd, until, issueRef, plainIssueRef, skip };
 }
 
-const USAGE = 'usage: autodev run "<requirement>"|<JIRA-KEY> [--repo <path>] [--issue <n>] [--spec <path>] [--branch <name>] [--test-cmd <cmd>] [--until <stage>] [--no-push]'
+const USAGE = 'usage: autodev run "<requirement>"|<JIRA-KEY> [--repo <path>] [--issue <n>] [--spec <path>] [--branch <name>] [--test-cmd <cmd>] [--skip <stages>] [--until <stage>] [--no-push]'
   + ' | init [--repo <path>] | daemon [--repo <path>] [--interval <min>] [--max-parallel <n>] [--auto-accept] [--once]'
   + ' | status | resume <id> | stop <id> | cost <id> | doctor [path] | selftest | install-skill [--project] [--force] | uninstall-skill [--project]';
 
 if (cmd === 'run') {
-  let { requirement, repoPath, noSpawn, specArg, branchArg, testCmd, until, issueRef } = parseRunArgs(rest);
+  let { requirement, repoPath, noSpawn, specArg, branchArg, testCmd, until, issueRef, plainIssueRef, skip } = parseRunArgs(rest);
   let slugPrefix = null;
   if (issueRef) {
     const { fetchGhIssue } = await import('../src/daemon.js');
@@ -122,9 +129,14 @@ if (cmd === 'run') {
 
   // Jira mode: "autodev run CV-123" (or a browse URL) — resolve the ticket into the
   // requirement before anything else, so spec matching and slug use the real summary.
-  const jiraKey = issueRef ? null : parseJiraRef(requirement);
+  // --issue-ref (jira-queue kickoffs) carries the requirement inline: record the key
+  // for the dashboard's ticket link, but never fetch.
+  const fetchKey = (issueRef || plainIssueRef) ? null : parseJiraRef(requirement);
+  // A requirement that opens with a key ("SCRUM-75: …") is *for* that ticket even though it is
+  // not fetched: record it, or the Deploy stage ships and the queue has no ticket to close.
+  const jiraKey = fetchKey ?? (plainIssueRef ? parseJiraRef(plainIssueRef) : null) ?? leadingJiraKey(requirement);
   let issueType = null, slugSource = slugPrefix ?? requirement;
-  if (jiraKey) {
+  if (fetchKey) {
     console.log(`fetching ${jiraKey} via atlassian-jira MCP…`);
     const issue = fetchIssue(jiraKey); // throws with a clear re-auth hint on failure
     requirement = issue.requirement;
@@ -160,10 +172,14 @@ if (cmd === 'run') {
   // 004, whose branch/worktree already exist). Naming from the inserted id also keeps the
   // NNN in autodev/NNN-slug equal to the run id the dashboard and `autodev status` show.
   const id = createRun(db, { slug, repo, repo_path: repoPath, worktree: '', branch: '', requirement,
-    jira_key: jiraKey, issue_type: issueType, test_cmd: testCmd, until_stage: until, issue_ref: issueRef,
+    jira_key: jiraKey, issue_type: issueType, test_cmd: testCmd, until_stage: until,
+    // issue_ref is what the Jira queue reconciles on; a leading key in the requirement counts.
+    issue_ref: issueRef ?? plainIssueRef ?? jiraKey,
     // Persist the adoption, don't just print it: every stage resolves the spec through this,
     // and without it they each re-pick the highest-numbered directory instead (FR-019).
-    spec_dir: adoptedSpec, stage: adoptedSpec ? 2 : 1 });
+    // A run whose opening stages are pre-skipped must start past them, not on one it will never run.
+    spec_dir: adoptedSpec, skipped: skip.length ? skip.join(',') : null,
+    stage: (() => { let s = adoptedSpec ? 2 : 1; while (skip.includes(s)) s++; return s; })() });
   const nnn = String(id).padStart(3, '0');
   const branch = branchArg || `${repoConfig(repoPath).branchPrefix || 'autodev'}/${nnn}-${slug}`;
   const wtRoot = process.env.AUTODEV_WORKTREES || join(homedir(), 'worktrees');

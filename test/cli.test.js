@@ -34,6 +34,25 @@ test('autodev run creates worktree, branch, registers run, spawns runner', async
   close();
 });
 
+test('a requirement that opens with its Jira key is recorded as the run\'s issue_ref', async () => {
+  // Without this, `autodev run "SCRUM-75: …"` deploys and the queue has no ticket to close.
+  const repo = mkdtempSync(join(tmpdir(), 'repo-'));
+  git(repo, ['init', '-q', '-b', 'main'], commit('init', '--allow-empty'));
+  const out = execFileSync('node', ['bin/autodev.js', 'run', 'SCRUM-75 (Bug): heading too large', '--repo', repo, '--no-spawn'], { encoding: 'utf8' });
+  const id = Number(/run #(\d+)/.exec(out)[1]);
+  const db = openDb();
+  const run = getRun(db, id);
+  assert.equal(run.issue_ref, 'SCRUM-75');
+  assert.equal(run.jira_key, 'SCRUM-75');
+  // Not fetched — the inline text is the requirement, verbatim.
+  assert.match(run.requirement, /^SCRUM-75 \(Bug\): heading too large/);
+  // prose that merely mentions a ticket stays untagged
+  const out2 = execFileSync('node', ['bin/autodev.js', 'run', 'fix CV-123 quickly', '--repo', repo, '--no-spawn'], { encoding: 'utf8' });
+  const run2 = getRun(db, Number(/run #(\d+)/.exec(out2)[1]));
+  db.close();
+  assert.equal(run2.issue_ref, null);
+});
+
 function repoWithCompleteSpec() {
   const repo = mkdtempSync(join(tmpdir(), 'repo-'));
   git(repo, ['init', '-q', '-b', 'main']);

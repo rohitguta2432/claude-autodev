@@ -109,6 +109,24 @@ test('an upload failure leaves the ticket open: no comment, no transition, retri
   assert.deepEqual(log2.filter(e => e.method === 'POST').map(e => e.url.split('/').at(-1)), ['attachments', 'attachments', 'comment', 'transitions']);
 });
 
+test('reconcileOnly closes a finished run with dispatch off, and starts nothing', async () => {
+  // A run started by hand (`autodev run "SCRUM-75: …"`) is not the queue's, but its ticket is
+  // still owed the proof. The server asks for exactly this when a run ends and enabled=false.
+  const { server, log, base } = await stubJira();
+  const repo = mkdtempSync(join(tmpdir(), 'repo-'));
+  configure(base, repo); // enabled: false
+  finishedRun(repo, 'SCRUM-75');
+  const out = await tick({ reconcileOnly: true });
+  server.close();
+  assert.equal(out.error, null);
+  assert.deepEqual(out.reconciled, ['SCRUM-75']);
+  assert.deepEqual(out.started, []);
+  const seq = log.filter(e => e.method === 'POST').map(e => e.url.replace(/^.*SCRUM-75\//, ''));
+  assert.deepEqual(seq, ['attachments', 'attachments', 'comment', 'transitions']);
+  // and the dispatch side never woke: no story search at all
+  assert.equal(log.some(e => e.url.includes('/search/jql')), false);
+});
+
 test('outcomeFor: blocked and rejected runs stay open with a plain paragraph', () => {
   const blocked = outcomeFor({ id: 3, status: 'BLOCKED', stage: 7, blocked_reason: 'tests still failing' });
   assert.equal(blocked.done, false);
