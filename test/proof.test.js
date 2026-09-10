@@ -89,3 +89,15 @@ test('gatherProof reads verdicts, events and the deploy tail from the run direct
   assert.equal(p.deployTail.split('\n').length, 15);
   assert.match(p.deployTail, /line 29$/);
 });
+
+test('a direct-push run reports the push and the fast-forward instead of a pull request', () => {
+  const events = [ev('stage_started', 'Implement', 3), ev('pushed', 'abc123def456 on autodev/009-x, rebased onto origin/main', 5),
+    ev('merged', 'abc123def456 via git push origin HEAD:main (fast-forward, pushMode direct)', 8),
+    ev('deployed', 'bash scripts/deploy.sh · exit 0 · 90s', 8), ev('stage_done', 'Deploy', 8)];
+  const r = proofReport({ ...run, pr_url: null }, { events, files: ['prod.png'], verdicts: {} });
+  const by = Object.fromEntries(r.facts.map(f => [f.label, f.link ?? f.text]));
+  assert.equal(by['Pull request'], undefined);
+  assert.match(by.Pushed, /rebased onto origin\/main/);
+  assert.match(by.Merged, /fast-forward/);
+  assert.match(r.headline, /merged and deployed\.$/);
+});

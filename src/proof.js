@@ -87,7 +87,12 @@ export function proofReport(run, { events = [], files = [], verdicts = {}, deplo
   const headline = `autodev run #${run.id} finished ${run.issue_ref ?? run.jira_key ?? run.slug}: ${shipped}.`;
 
   const facts = [];
-  facts.push(run.pr_url ? { label: 'Pull request', link: run.pr_url } : { label: 'Pull request', text: 'none opened (push stage skipped)' });
+  // pushMode direct opens no pull request; the branch push and the fast-forward onto the
+  // base branch are the facts instead, both from events the runner wrote.
+  const pushed = last('pushed')?.detail ?? null;
+  if (run.pr_url) facts.push({ label: 'Pull request', link: run.pr_url });
+  else if (pushed) facts.push({ label: 'Pushed', text: pushed });
+  else facts.push({ label: 'Pull request', text: 'none opened (push stage skipped)' });
   facts.push({ label: 'Merged', text: merged ?? 'not by autodev' });
   facts.push({ label: 'Deployed', text: deployed ?? 'not by autodev — the repo has no deploy stage configured' });
   facts.push({ label: 'Tests', text: testCmd ? `${testCmd} exited 0` : testGreen ? 'test stage passed' : 'test stage did not complete' });

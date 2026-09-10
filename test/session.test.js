@@ -98,3 +98,16 @@ test('sessionBlock: each channel is clamped independently', () => {
   assert.match(b, /bytes elided/);
   assert.ok(b.length < 2.5 * 1024 * 1024, `block should be bounded, got ${b.length}`);
 });
+
+test('causeLine: a --output-format json result line is reported by its `result`, not its counters', () => {
+  const blob = JSON.stringify({ type: 'result', is_error: true, total_cost_usd: 0, usage: { input_tokens: 0 },
+    result: 'Failed to authenticate: OAuth session expired and could not be refreshed' });
+  const line = causeLine(`(node:1) ExperimentalWarning: x\n${blob}\n`);
+  assert.equal(line, '(node:1) ExperimentalWarning: x / Failed to authenticate: OAuth session expired and could not be refreshed');
+  assert.doesNotMatch(line, /total_cost_usd/);
+});
+
+test('classify: the CLI\'s own OAuth wording is a terminal auth condition', () => {
+  assert.equal(classify({ out: 'Failed to authenticate: OAuth session expired and could not be refreshed' }).code, 'not-authenticated');
+  assert.equal(classify({ out: 'OAuth session expired' }).code, 'not-authenticated');
+});

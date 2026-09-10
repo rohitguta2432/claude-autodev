@@ -341,3 +341,95 @@ test('.autodev.json "push": false caps the run at Verify', () => {
   assert.equal(run.status, 'DONE');
   assert.equal(run.stage, 4); // Verify is the last stage that ran
 });
+
+// ---- pushMode "direct": no pull request, the runner lands the branch itself ----
+// origin has a real main; the worktree branch is one commit ahead of it, and main moves
+// under the run before deploy — the shape that made run #9's `gh pr merge --rebase` fail.
+function makeDirectRepo(cfg = {}) {
+  const origin = mkdtempSync(join(tmpdir(), 'origin-'));
+  git(origin, ['init', '-q', '--bare']);
+  const wt = mkdtempSync(join(tmpdir(), 'wt-'));
+  git(wt, ['init', '-q', '-b', 'main'], commit('init', '--allow-empty'), ['remote', 'add', 'origin', origin]);
+  writeFileSync(join(wt, 'package.json'), JSON.stringify({ scripts: { test: 'node -e ""' } }));
+  writeFileSync(join(wt, '.autodev.json'), JSON.stringify({ pushMode: 'direct', baseBranch: 'main',
+    skip: ['spec', 'analyze', 'verify', 'review'],
+    deploy: { merge: true, cmd: 'node -e "console.log(\'deployed\')"',
+      proofCmd: 'node -e "require(\'fs\').writeFileSync(process.env.AUTODEV_PROOF_DIR + \'/shot.txt\', \'ok\')"' },
+    ...cfg }));
+  git(wt, ['add', '-A'], commit('pkg'), ['push', '-q', '-u', 'origin', 'main'], ['checkout', '-qb', 'autodev/001-x']);
+  writeFileSync(join(wt, 'feature.txt'), 'built\n');
+  // main moves: somebody else lands a commit on origin/main while this run is in flight
+  const other = mkdtempSync(join(tmpdir(), 'other-'));
+  git(other, ['clone', '-q', origin, '.']);
+  writeFileSync(join(other, 'elsewhere.txt'), 'landed by another run\n');
+  git(other, ['add', '-A'], commit('elsewhere'), ['push', '-q', 'origin', 'main']);
+  return { wt, origin };
+}
+// A stub that answers `auth status` and otherwise implements spec-less: commit what is there.
+const directStubJs = (calls, { loggedIn = true } = {}) => `
+const fs = require('node:fs'); const cp = require('node:child_process');
+if (process.argv[2] === 'auth') { process.stdout.write(JSON.stringify({ loggedIn: ${loggedIn}, email: 'x@y' })); process.exit(0); }
+const p = String(process.argv[3] ?? '');
+fs.appendFileSync(${JSON.stringify(calls)}, p.slice(0, 40) + '\\n');
+cp.execFileSync('git', ['add', '-A'], { stdio: 'ignore' });
+cp.execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'impl'], { stdio: 'ignore' });
+`;
+function runDirect({ loggedIn = true, before = () => {}, cfg = {} } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'stub-direct-'));
+  const calls = join(dir, 'calls'); writeFileSync(calls, '');
+  const bin = stubClaude(dir, directStubJs(calls, { loggedIn }));
+  const { wt, origin } = makeDirectRepo(cfg);
+  const db = openDb();
+  const id = createRun(db, { slug: 'd', repo: 'demo', repo_path: wt, worktree: wt, branch: 'autodev/001-x', requirement: 'ship feature.txt' });
+  db.close();
+  before({ id, wt });
+  execFileSync(process.execPath, ['src/runner.js', String(id)], { env: { ...process.env, AUTODEV_CLAUDE_BIN: bin } });
+  const db2 = openDb();
+  const run = getRun(db2, id); db2.close();
+  const events = readFileSync(join(runDir(id), 'events.jsonl'), 'utf8');
+  return { id, run, wt, origin, events, calls: readFileSync(calls, 'utf8') };
+}
+
+test('pushMode direct: no PR, no push session — the runner rebases, pushes, and fast-forwards main after tests', () => {
+  const { run, origin, events, calls } = runDirect();
+  assert.equal(run.status, 'DONE', run.blocked_reason ?? '');
+  assert.equal(run.pr_url, null);
+  assert.doesNotMatch(calls, /ce-commit-push-pr/, 'the push stage must not spend a session');
+  assert.match(events, /"type":"pushed".*rebased onto origin\/main/);
+  assert.match(events, /"type":"merged".*fast-forward, pushMode direct/);
+  assert.match(events, /"type":"deployed"/);
+  // main carries both the other run's commit and ours, in that order — a rebase, not a merge
+  const log = execFileSync('git', ['log', '--format=%s', 'main'], { cwd: origin, encoding: 'utf8' }).trim().split('\n');
+  assert.deepEqual(log.slice(0, 2), ['impl', 'elsewhere']);
+  assert.match(events, /"label"|shot\.txt/);
+});
+
+test('auth preflight: a signed-out CLI parks before any session is spent, and says how to sign in', () => {
+  const { run, calls } = runDirect({ loggedIn: false });
+  assert.equal(run.status, 'BLOCKED');
+  assert.equal(calls, '', 'no session may be bought against a CLI that cannot authenticate');
+  assert.match(run.blocked_reason, /not signed in.*\/login/);
+});
+
+test('deploy lock: a lock left by a dead runner is reclaimed, not waited on', async () => {
+  const { createHash } = await import('node:crypto');
+  const { run, events } = runDirect({ before: ({ wt }) => {
+    const dir = join(process.env.AUTODEV_HOME, 'locks', `deploy-${createHash('sha1').update(wt).digest('hex').slice(0, 12)}`);
+    execFileSync(process.execPath, ['-e', `require('fs').mkdirSync(${JSON.stringify(dir)}, { recursive: true });
+      require('fs').writeFileSync(${JSON.stringify(join(dir, 'owner.json'))}, JSON.stringify({ run: 999, pid: 2147483000 }))`]);
+  } });
+  assert.equal(run.status, 'DONE', run.blocked_reason ?? '');
+  assert.match(events, /deploy lock left by dead run #999.*reclaimed/);
+  assert.match(events, /"type":"deployed"/);
+});
+
+test('pushMode direct: a rebase conflict parks the run naming the branch, and leaves no rebase in progress', () => {
+  const { run, wt } = runDirect({ before: ({ wt }) => {
+    // the other side already landed elsewhere.txt; our branch will commit a different one
+    writeFileSync(join(wt, 'elsewhere.txt'), 'conflicting content\n');
+  } });
+  assert.equal(run.status, 'BLOCKED');
+  assert.equal(run.stage, 5);
+  assert.match(run.blocked_reason, /rebase onto origin\/main conflicts.*autodev\/001-x/);
+  assert.ok(!existsSync(join(wt, '.git', 'rebase-merge')) && !existsSync(join(wt, '.git', 'rebase-apply')), 'rebase must be aborted');
+});

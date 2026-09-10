@@ -30,10 +30,10 @@ produces the artifact the next stage needs — no artifact, no advance.
 | 2 | Analyze | every `- [ ]` in `checklists/*.md` ticked |
 | 3 | Implement | every task in `tasks.md` ticked, worktree clean (committed) |
 | 4 | Verify | `.autodev/verify.json` verdict is `PASS` (no critical/high findings) |
-| 5 | Push | branch has an upstream remote (opens the PR with `gh pr create`) |
+| 5 | Push | branch has an upstream remote (opens the PR with `gh pr create`; with `pushMode: "direct"` the runner rebases and pushes the branch itself — no session, no PR) |
 | 6 | Review | `.autodev/review.json` verdict is `APPROVE` (loops fix ⇄ re-review) |
 | 7 | Test | the repo's own test command exits 0, **and** the holdout scenarios pass |
-| 8 | Deploy | the merge and the deploy command both succeed — **opt-in**, see [Deploy](#deploy) |
+| 8 | Deploy | the merge (or, direct mode, the fast-forward of the base branch) and the deploy command both succeed — **opt-in**, see [Deploy](#deploy). One deploy per repo at a time: parallel runs queue on a lock here |
 
 Nothing in the pipeline shares context between stages: every one is a fresh
 `claude -p` session. The reviewer has never seen the plan, and the builder has
@@ -166,6 +166,19 @@ worktree — that is where your deploy tooling and credentials live. Either half
 be omitted: `{"deploy":{"merge":true}}` merges and stops, `{"deploy":{"merge":false,
 "cmd":"..."}}` deploys something you merge elsewhere.
 
+With `"pushMode": "direct"` there is no pull request to merge. Stage 5 rebases the run's
+branch onto the base branch (`baseBranch`, default `origin/HEAD` → `main`) and pushes the
+branch; stage 8, after the tests, rebases once more and fast-forwards the base branch to
+it with `git push origin HEAD:<base>`. A rebase conflict parks the run naming the branch,
+with the rebase aborted, for the operator to resolve and resume. Neither step spends a
+session or needs `gh`. This is the mode for a repo whose rule is "commit on main and
+deploy in the same session" — a GitHub merge of a PR that main has moved under (`This
+branch can't be rebased`) was the most common park before it.
+
+Runs can implement and test in parallel (`maxParallel` on the Jira queue), but deploys
+are serialised: stage 8 takes a per-repository lock under `~/.autodev/locks/` and waits
+for the run holding it; a lock left by a dead runner is reclaimed.
+
 The stage is not agentic. The runner runs both steps and **parks on failure** with
 the output in `~/.autodev/runs/<id>/deploy-output.txt`; there is no fix loop,
 because a half-deployed application is the one place in this pipeline where another
@@ -204,6 +217,8 @@ failure leaves the ticket open for the next tick.
 | symptom | cause / fix |
 |---------|-------------|
 | `no test command detected — pass --test-cmd …` (run parks at stage 7) | detection covers npm/pytest/tox/maven/gradle/go/cargo/make/dotnet at the root and one subdir level; anything else needs `--test-cmd "<cmd>"` or `"testCmd"` in `.autodev.json` |
+| `the claude CLI is not signed in` (parks before stage 1) | the runner asks `claude auth status` before spending a session; run `claude`, `/login`, then `autodev resume <id>` |
+| `rebase onto origin/main conflicts` (parks at stage 5 or 8, direct mode) | resolve on the run's branch in its worktree, commit, `autodev resume <id>` |
 | `branch has no upstream — push failed` (parks at stage 5) | the repo has no `origin` remote or no push rights; add one, or run with `--no-push` |
 | `review verdict: REQUEST_CHANGES` after 3 rounds | the review⇄fix loop spent its budget; read `.autodev/review.json` in the worktree, fix or relax, then `autodev resume <id>` |
 | `no TTY to confirm on — run autodev once interactively` | the skip-permissions consent hasn't been recorded; run any `autodev run` from a terminal once |
@@ -235,6 +250,8 @@ Per-repo `.autodev.json` (committed to the *target* repo):
 | `stageEffort` | `{"push": "low"}` | per-stage effort override, same keys as `stageModels` |
 | `until` | `"analyze"` | always stop after this stage |
 | `push` | `false` | never push/PR — caps runs at Verify |
+| `pushMode` | `"direct"` | stage 5 rebases + pushes the branch itself and stage 8 fast-forwards the base branch — no PR, no `gh`, no session. Default: PR via `gh` |
+| `baseBranch` | `"main"` | the branch direct mode lands on (default: `origin/HEAD`, else `main`) |
 | `branchPrefix` | `"feature"` | branch naming: `<prefix>/NNN-slug` |
 | `deploy` | `{"merge":true,"cmd":"./deploy.sh","proofCmd":"./proof.sh"}` | enables stage 8 — see [Deploy](#deploy) and [Proof](#proof). Absent = 7-stage pipeline |
 | `worktreeCopy` | `["local.properties", ".env", "debug.keystore"]` | exact files/dirs (typically gitignored) copied from the main repo into each run's fresh worktree at kickoff; entries already tracked in the repo are skipped; see the note below |

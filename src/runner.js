@@ -1,8 +1,9 @@
 import { execFileSync, execSync } from 'node:child_process';
 import { writeFileSync, appendFileSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { openDb, getRun, updateRun, runDir, PORT, skippedSet } from './db.js';
+import { openDb, getRun, updateRun, runDir, PORT, skippedSet, AUTODEV_HOME } from './db.js';
 import { emit } from './events.js';
 import { STAGES, scheduledStages, untilStage, detectTestCmd, findSpecDir, specDirs,
          holdoutPrompt, holdoutFixPrompt, stageN } from './stages.js';
@@ -191,6 +192,97 @@ async function holdoutStage(stage) {
   }
 }
 
+// ---- pushMode "direct": the runner lands the branch on the base branch itself ----
+// No pull request, no `gh`, no session. Stage 5 rebases the branch onto the base tip and
+// pushes it (so the remote has what tests will run against); stage 8, after tests, rebases
+// once more and fast-forwards the base branch to it. Run #9 parked on "This branch can't be
+// rebased" from GitHub's merge API after main moved under an open PR; a local rebase either
+// succeeds or names the conflicting commit, and the operator resolves it on the branch.
+const direct = cfg.pushMode === 'direct';
+const gitq = (args, extra = {}) => execFileSync('git', args, { cwd: run.worktree, encoding: 'utf8',
+  stdio: 'pipe', timeout: 120_000, windowsHide: true, ...extra }).trim();
+function baseBranch() {
+  if (cfg.baseBranch) return String(cfg.baseBranch);
+  try { return gitq(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']).replace(/^origin\//, ''); } catch {}
+  return 'main';
+}
+// Rebase the branch onto the base tip. A conflict aborts the rebase (the worktree is left
+// exactly as it was) and parks the run naming the commit that did not apply — final, because
+// no retry rewrites history for us.
+function rebaseOnto(base) {
+  gitq(['fetch', '-q', 'origin', base]);
+  try { gitq(['rebase', '-q', `origin/${base}`]); }
+  catch (e) {
+    try { gitq(['rebase', '--abort']); } catch { /* nothing in progress */ }
+    throw Object.assign(new Error(`rebase onto origin/${base} conflicts: ${causeLine(`${e.stdout ?? ''}\n${e.stderr ?? ''}`, 200)} — resolve on ${run.branch} by hand, then resume`), { final: true });
+  }
+}
+async function pushDirect(stage) {
+  const base = baseBranch();
+  await ev({ type: 'activity', stage: stage.n, detail: `push: rebase onto origin/${base}, push ${run.branch} — no pull request (pushMode direct)` });
+  rebaseOnto(base);
+  gitq(['push', '-q', '-u', '--force-with-lease', 'origin', run.branch]);
+  await ev({ type: 'pushed', stage: stage.n, detail: `${gitq(['rev-parse', '--short=12', 'HEAD'])} on ${run.branch}, rebased onto origin/${base}` });
+}
+// Stage 8's "merge" in direct mode: fast-forward the base branch to this branch. Idempotent
+// on resume — a run parked after landing (deploy or proof failed) finds its HEAD already on
+// the base and records that instead of pushing again.
+async function landDirect(stage) {
+  const base = baseBranch();
+  gitq(['fetch', '-q', 'origin', base]);
+  const head = gitq(['rev-parse', 'HEAD']);
+  let landed = false;
+  try { gitq(['merge-base', '--is-ancestor', head, `origin/${base}`]); landed = true; } catch { /* not yet */ }
+  if (landed) {
+    await ev({ type: 'merged', stage: stage.n, detail: `${head.slice(0, 12)} (already on ${base} before this attempt)` });
+    return;
+  }
+  await ev({ type: 'activity', stage: stage.n, detail: `landing ${run.branch} on ${base} (fast-forward push, pushMode direct)` });
+  rebaseOnto(base);
+  try { gitq(['push', '-q', 'origin', `HEAD:${base}`]); }
+  catch (e) {
+    throw Object.assign(new Error(`push to ${base} failed: ${causeLine(`${e.stdout ?? ''}\n${e.stderr ?? ''}`, 200) || e.message}`), { final: true });
+  }
+  await ev({ type: 'merged', stage: stage.n, detail: `${gitq(['rev-parse', '--short=12', 'HEAD'])} via git push origin HEAD:${base} (fast-forward, pushMode direct)` });
+  try { gitq(['push', '-q', 'origin', '--delete', run.branch], { timeout: 60_000 }); }
+  catch { await ev({ type: 'activity', stage: stage.n, detail: `remote branch ${run.branch} not deleted — remove it by hand` }); }
+}
+
+// One deploy per repository at a time. Runs implement and test in parallel worktrees, but
+// two deploy commands racing the same service (and two proof commands photographing a
+// half-rolled one) is how a parallel queue ships the wrong commit. The lock is a directory
+// under AUTODEV_HOME keyed by repo path — mkdir is atomic on every platform — holding the
+// owner's pid so a lock left by a killed runner is reclaimed, not waited on forever.
+const lockDir = () => join(AUTODEV_HOME(), 'locks', `deploy-${createHash('sha1').update(run.repo_path).digest('hex').slice(0, 12)}`);
+const pidAlive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+async function withDeployLock(stage, fn) {
+  const dir = lockDir();
+  mkdirSync(dirname(dir), { recursive: true });
+  const deadline = Date.now() + CFG.stageTimeoutMin * 60_000;
+  let announced = false;
+  for (;;) {
+    try { mkdirSync(dir); break; }
+    catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      let owner = null;
+      try { owner = JSON.parse(readFileSync(join(dir, 'owner.json'), 'utf8')); } catch { /* being written, or stale */ }
+      if (owner && owner.run !== runId && !pidAlive(owner.pid)) {
+        await ev({ type: 'activity', stage: stage.n, detail: `deploy lock left by dead run #${owner.run} (pid ${owner.pid}) — reclaimed` });
+        rmSync(dir, { recursive: true, force: true }); continue;
+      }
+      if (owner?.run === runId) { rmSync(dir, { recursive: true, force: true }); continue; } // our own, from a resume
+      if (Date.now() > deadline)
+        throw Object.assign(new Error(`deploy lock held by run #${owner?.run ?? '?'} for over ${CFG.stageTimeoutMin} minutes`), { final: true });
+      if (!announced) { announced = true;
+        await ev({ type: 'activity', stage: stage.n, detail: `waiting for deploy lock held by run #${owner?.run ?? '?'}` }); }
+      await new Promise(r => setTimeout(r, 5_000));
+    }
+  }
+  writeFileSync(join(dir, 'owner.json'), JSON.stringify({ run: runId, pid: process.pid, since: Date.now() }));
+  try { return await fn(); }
+  finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
 // What GitHub says about the run's PR — null when gh is missing or the query fails, so a
 // diagnostic read can never be the reason a deploy stage parks.
 function prState(pr) {
@@ -209,12 +301,13 @@ async function deployStage(stage) {
   const d = cfg.deploy || {};
   if (d.merge !== false) {
     const pr = getRun(db, runId).pr_url;
-    if (!pr) throw Object.assign(new Error('deploy needs a merged PR but no PR was opened (push stage skipped?)'), { final: true });
+    if (!pr && direct) await landDirect(stage);
+    else if (!pr) throw Object.assign(new Error('deploy needs a merged PR but no PR was opened (push stage skipped?)'), { final: true });
     const strategy = ['squash', 'merge', 'rebase'].includes(d.strategy) ? d.strategy : 'squash';
     // Idempotent on resume: a run parked after the merge (deploy or proof failed) must not
     // fail again on "pull request already merged" when the operator resumes it.
-    const before = prState(pr);
-    if (before?.state === 'MERGED') {
+    const before = pr ? prState(pr) : null;
+    if (!pr) { /* landed above */ } else if (before?.state === 'MERGED') {
       await ev({ type: 'merged', stage: stage.n, detail: `${before.mergeCommit?.oid?.slice(0, 12) ?? 'commit unknown'} (already merged before this attempt)` });
     } else {
       await ev({ type: 'activity', stage: stage.n, detail: `merging ${pr} (--${strategy})` });
@@ -343,6 +436,22 @@ const specsBefore = new Set(specDirs(run.worktree));
 // builder reads out of the history what the sequester takes off the disk.
 excludeHoldout(run.worktree);
 const PIPELINE = scheduledStages(cfg);
+// Ask the CLI whether it is signed in BEFORE spending a stage on finding out. Run #9 bought
+// three identical sessions and parked with a JSON blob for a reason `claude auth status`
+// reports in 200 ms. Fail open: a CLI without the subcommand, or one that answers with
+// something unparseable, changes nothing — the session-level classification still applies.
+{
+  const bin = process.env.AUTODEV_CLAUDE_BIN || 'claude';
+  const [file, argv] = bin.endsWith('.js') ? [process.execPath, [bin, 'auth', 'status']] : [bin, ['auth', 'status']];
+  let status = null;
+  try { status = JSON.parse(execFileSync(file, argv, { encoding: 'utf8', timeout: 20_000, windowsHide: true, stdio: 'pipe' })); }
+  catch (e) { try { status = JSON.parse(String(e.stdout ?? '')); } catch { status = null; } }
+  if (status && status.loggedIn === false) {
+    const first = PIPELINE.find(s => s.n >= run.stage) ?? PIPELINE[0];
+    await park(first, new Error('the claude CLI is not signed in (claude auth status: loggedIn false) — run `claude` once interactively, `/login`, then `autodev resume ' + runId + '`'));
+  }
+  if (status) await ev({ type: 'activity', stage: run.stage, detail: `claude auth: ${status.email ?? 'signed in'}${status.subscriptionType ? ` (${status.subscriptionType})` : ''}` });
+}
 // Hard stop after stage N: change-controlled repos can forbid autonomous push/PR
 // outright; precedence lives in untilStage, shared with run kickoff so the two never disagree.
 const until = untilStage(cfg, run.until_stage);
@@ -362,7 +471,8 @@ for (const stage of PIPELINE.filter(s => s.n >= run.stage && s.n <= until && !sk
     try {
       if (stage.key === 'review') await reviewStage(stage);
       else if (stage.key === 'test') await testStage(stage);
-      else if (stage.key === 'deploy') { await deployStage(stage); stage.check(run); }
+      else if (stage.key === 'push' && direct) { await pushDirect(stage); stage.check(run); }
+      else if (stage.key === 'deploy') { await withDeployLock(stage, () => deployStage(stage)); stage.check(run); }
       else {
         const extra = lastErr ? `\n\nA previous attempt failed its verification: ${lastErr.message}. Address that specifically.` : '';
         lastOut = runClaude(stage.prompt(run) + extra, stage.n);

@@ -8,11 +8,21 @@ const MAX_REASON = 300;
 const KEEP = 1024 * 1024;      // retained per channel in a session block
 const HEAD = 200 * 1024;       // …of which this much is the head; the rest is the tail
 
+// A `--output-format json` result line is one 1.5 KB JSON object whose only human-readable
+// part is `result`. Reported whole, it becomes the park reason, blocked.md and the Jira
+// comment (run #9: a wall of usage counters where "OAuth session expired" should have been).
+function resultText(line) {
+  if (!/^\s*\{.*"type":"result"/.test(line)) return line;
+  try { const r = JSON.parse(line); return r.type === 'result' ? String(r.result ?? '') : line; }
+  catch { return line; }
+}
+
 // The last lines of a session's output that actually carry information.
 // The tail is where the cause lives, but the very last line is often a rule, a spinner
 // remnant or a blank — so lines without a letter or digit are skipped rather than reported.
 export function causeLine(text, max = MAX_REASON) {
   const lines = String(text ?? '').split('\n')
+    .map(resultText)
     .map(l => l.replace(/\s+/g, ' ').trim())
     .filter(l => l && /[\p{L}\p{N}]/u.test(l));
   return lines.slice(-3).join(' / ').slice(0, max);
@@ -25,7 +35,7 @@ export function causeLine(text, max = MAX_REASON) {
 const TERMINAL = [
   {
     code: 'not-authenticated',
-    match: /\bnot logged in\b|please run \/login|invalid api key|authentication_error|\boauth token (has )?expired\b/i,
+    match: /\bnot logged in\b|please run \/login|invalid api key|authentication_error|\boauth (token|session) (has )?expired\b|failed to authenticate/i,
     reason: 'the claude CLI is installed but not signed in',
     fix: 'run `claude` once interactively to sign in, then `autodev resume <id>`',
   },

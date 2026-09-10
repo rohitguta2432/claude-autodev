@@ -30,6 +30,9 @@ export { pipelineStubJs } from '../src/selftest.js';
 // one received (the assertion that matters for resume seeding).
 export const failingStubJs = ({ stdout = '', stderr = '', exit = 1, recordTo = null } = {}) => `
 const fs = require('node:fs');
+// The runner's auth preflight (\`claude auth status\`) is not a session: answer like a CLI
+// without the subcommand so it is neither recorded nor counted against the retry budget.
+if (process.argv[2] === 'auth') process.exit(1);
 const p = String(process.argv[3] ?? '');
 ${recordTo ? `fs.appendFileSync(${JSON.stringify(recordTo)}, JSON.stringify({ prompt: p }) + '\\n');` : ''}
 ${stdout ? `process.stdout.write(${JSON.stringify(stdout)});` : ''}
