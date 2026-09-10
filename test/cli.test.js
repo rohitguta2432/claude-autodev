@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, readdirSync, mkdirSync, openSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, readdirSync, mkdirSync, openSync, existsSync, rmSync, symlinkSync, readlinkSync, lstatSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename, delimiter } from 'node:path';
 import { execSync, execFileSync, spawn } from 'node:child_process';
@@ -469,4 +469,29 @@ test('an uncommitted push:false does not silence the kickoff warn: the cap comes
   writeFileSync(join(repo, '.autodev.json'), JSON.stringify({ push: false })); // uncommitted
   const out = execFileSync('node', ['bin/autodev.js', 'run', 'uncommitted push false probe', '--repo', repo, '--no-spawn'], { encoding: 'utf8' });
   assert.match(out, /will push a branch and open a draft PR/);
+});
+
+test('worktreeCopy keeps relative in-tree symlinks (npm binstubs) and drops links that leave the entry', { skip: process.platform === 'win32' && 'symlinks need a privilege on Windows' }, () => {
+  const parent = mkdtempSync(join(tmpdir(), 'wtlink-'));
+  const repo = join(parent, 'repo');
+  mkdirSync(repo);
+  git(repo, ['init', '-q', '-b', 'main'], commit('init', '--allow-empty'));
+  writeFileSync(join(repo, '.gitignore'), 'deps/\n');
+  writeFileSync(join(repo, '.autodev.json'), JSON.stringify({ worktreeCopy: ['deps'] }));
+  mkdirSync(join(repo, 'deps', 'pkg'), { recursive: true });
+  mkdirSync(join(repo, 'deps', '.bin'));
+  writeFileSync(join(repo, 'deps', 'pkg', 'cli.js'), 'cli');
+  writeFileSync(join(parent, 'outside.txt'), 'must not be reachable');
+  symlinkSync(join('..', 'pkg', 'cli.js'), join(repo, 'deps', '.bin', 'cli'));            // relative, inside: kept
+  symlinkSync(join('..', '..', '..', 'outside.txt'), join(repo, 'deps', '.bin', 'escape')); // relative, leaves the entry: dropped
+  symlinkSync(join(repo, 'deps', 'pkg', 'cli.js'), join(repo, 'deps', '.bin', 'absolute')); // absolute into the source tree: dropped
+  git(repo, ['add', '.gitignore', '.autodev.json'], commit('cfg'));
+  execFileSync('node', ['bin/autodev.js', 'run', 'link probe', '--repo', repo, '--no-spawn'], { encoding: 'utf8' });
+  const db = openDb(); const run = listRuns(db)[0]; db.close();
+  const bin = join(run.worktree, 'deps', '.bin');
+  assert.equal(readlinkSync(join(bin, 'cli')), join('..', 'pkg', 'cli.js'), 'the binstub stays a relative link into the copy');
+  assert.equal(readFileSync(join(bin, 'cli'), 'utf8'), 'cli');
+  assert.ok(!existsSync(join(bin, 'escape')) && !lstatSync(bin).isSymbolicLink());
+  assert.throws(() => lstatSync(join(bin, 'escape')), 'a link that leaves the entry is not copied');
+  assert.throws(() => lstatSync(join(bin, 'absolute')), 'an absolute link is not copied');
 });

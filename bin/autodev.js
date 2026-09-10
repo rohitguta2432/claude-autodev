@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, openSync, copyFileSync, readFileSync, writeFileSync, existsSync, rmSync, cpSync, appendFileSync } from 'node:fs';
+import { mkdirSync, openSync, copyFileSync, readFileSync, writeFileSync, existsSync, rmSync, cpSync, appendFileSync, lstatSync, readlinkSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
-import { join, dirname, basename, resolve, relative, isAbsolute } from 'node:path';
+import { join, dirname, basename, resolve, relative, isAbsolute, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { PORT, runDir, openDb, createRun, getRun, listRuns, updateRun, deleteRun, AUTODEV_HOME } from '../src/db.js';
@@ -226,6 +226,32 @@ if (cmd === 'run') {
   // commits and pushes); a copy that fails degrades to today's behavior rather than aborting
   // the whole kickoff.
   // .autodev.json only - no CLI flag, no env var; default [].
+  // Symlinks inside an entry are kept as symlinks when they are relative and stay inside
+  // the entry — npm's node_modules/.bin binstubs are exactly that. Dereferencing them
+  // (the previous behaviour) rewrote each binstub as a pointer into the SOURCE checkout,
+  // so every tool the worktree ran came from the other tree: run #10's `next build`
+  // loaded two copies of Next in one process and every static prerender died with
+  // "Invariant: Expected workStore to be initialized". A link that is absolute or resolves
+  // outside the entry is skipped — it could point anywhere on the machine. Windows, where
+  // creating a symlink needs a privilege a build-config copy should never require, falls
+  // back to the dereferenced copy.
+  const copyTree = (from, to) => {
+    const root = resolve(from);
+    const inside = (p) => {
+      let st; try { st = lstatSync(p); } catch { return false; }
+      if (!st.isSymbolicLink()) return true;
+      const target = readlinkSync(p);
+      if (isAbsolute(target)) return false;
+      const abs = resolve(dirname(p), target);
+      return abs === root || abs.startsWith(root + sep);
+    };
+    try { cpSync(from, to, { recursive: true, verbatimSymlinks: true, filter: inside }); }
+    catch (e) {
+      if (process.platform !== 'win32') throw e;
+      rmSync(to, { recursive: true, force: true });
+      cpSync(from, to, { recursive: true, dereference: true });
+    }
+  };
   const copyList = repoConfig(repoPath).worktreeCopy;
   const copyArr = Array.isArray(copyList) ? copyList : [];
   // Escape-check before the batched git call: an out-of-repo or empty pathspec makes
@@ -260,10 +286,7 @@ if (cmd === 'run') {
     }
     try {
       mkdirSync(dirname(join(worktree, rel)), { recursive: true });
-      // dereference: true copies file content, never a live symlink pointer, which could
-      // point outside the repo; it also sidesteps Windows symlink creation needing
-      // privileges a build-config copy should never require.
-      cpSync(src, join(worktree, rel), { recursive: true, dereference: true });
+      copyTree(src, join(worktree, rel));
       // Sessions run `git add -A`, so an unexcluded copy would ride the stage-5 push.
       // The exclude file is the repo-wide .git/info/exclude (git shares info/ across
       // worktrees; there is no per-worktree exclude) - same mechanism as the holdout
