@@ -131,6 +131,16 @@ const specFile = (run, f) => {
   return join(d, f);
 };
 
+// A run with no complete spec set — the repo skips the Spec stage (.autodev.json "skip"), or
+// nothing in specs/ was written for this requirement. Implement and Verify then work from the
+// requirement itself instead of tasks.md. Decided per call, not per run: a spec that appears
+// later (a session wrote one anyway) is honoured from that point. The chosen directory is
+// specDirOf's, the same one the checks read, so prompt and check cannot disagree (FR-022).
+// "Has a spec" here means "has a tasks.md", because that is the document these two stages
+// consume; spec.md alone (the shape a hand-written fix leaves) does not make the run spec-driven.
+export const hasSpecSet = (run) => { const d = specDirOf(run); return Boolean(d && existsSync(join(d, 'tasks.md'))); };
+const requirementRef = (run) => `the requirement below (from Jira ${run.jira_key ?? run.issue_ref ?? ''}):\n${run.requirement}`;
+
 // The stages a run will actually attempt. Deploy is opt-in, so an unconfigured repo has a
 // 7-stage pipeline and says so — rather than scheduling a stage that can only no-op.
 export const scheduledStages = (cfg = {}) => STAGES.filter(s => s.key !== 'deploy' || !!cfg.deploy);
@@ -179,17 +189,26 @@ export const STAGES = [
   },
   {
     n: 3, key: 'implement', title: 'Implement', skill: 'executing-plans',
-    prompt: (run) => `Use the executing-plans skill if it is installed; otherwise implement tasks.md from ${specRef(run)} in this repository yourself, task by task, test-driven, committing after each task and ticking each task checkbox (- [x] T###) in tasks.md as you complete it. All tests must pass before you finish.`,
+    prompt: (run) => hasSpecSet(run)
+      ? `Use the executing-plans skill if it is installed; otherwise implement tasks.md from ${specRef(run)} in this repository yourself, task by task, test-driven, committing after each task and ticking each task checkbox (- [x] T###) in tasks.md as you complete it. All tests must pass before you finish.`
+      : `There is no spec set for this work; implement ${requirementRef(run)}\nWork test-driven: write a failing test that pins the requirement (its acceptance criteria where it states them) before the change, make it pass, keep every existing test green, and commit. Do not create a specs/ directory. All tests must pass before you finish.`,
     check: (run) => {
-      const tasks = readFileSync(specFile(run, 'tasks.md'), 'utf8');
-      const un = tasks.match(/^- \[ \] \**(T\d+)/m);
-      need(!un, `unchecked task remains: ${un?.[1]}`);
+      if (hasSpecSet(run)) {
+        const tasks = readFileSync(specFile(run, 'tasks.md'), 'utf8');
+        const un = tasks.match(/^- \[ \] \**(T\d+)/m);
+        need(!un, `unchecked task remains: ${un?.[1]}`);
+      } else {
+        // Spec-less: the commit is the evidence — a session that changed nothing did nothing.
+        need(git(run.worktree, 'show --stat --format= HEAD').trim() !== '', 'no commit made for the requirement');
+      }
       need(git(run.worktree, 'status --porcelain').trim() === '', 'uncommitted changes in worktree');
     },
   },
   {
     n: 4, key: 'verify', title: 'Verify', skill: 'speckit-verify',
-    prompt: (run) => `Run a post-implementation verification gate on ${specRef(run)}. Follow .specify/extensions/verify/commands/verify.md (the /speckit.verify.run command) if it exists in this repo; otherwise verify yourself against spec.md, plan.md, tasks.md and the constitution (if present): (A) task truthfulness — every ticked task's referenced files exist and contain the claimed change; (B) requirement coverage — each functional requirement has implementation evidence in code; (C) scenario/test coverage — acceptance scenarios and edge cases map to real tests; (D) spec intent — behaviour matches acceptance criteria, including spec revisions made after implementation started. If you find fixable gaps: append new unchecked checkbox tasks to tasks.md (never edit or delete existing entries), implement them, tick them, keep tests green, and commit. Then write your final verdict as JSON to .autodev/verify.json in the repo root: {"verdict":"PASS"|"FAIL","findings":[{"id":"C1","category":"...","severity":"CRITICAL"|"HIGH"|"MEDIUM"|"LOW","summary":"..."}]}. PASS only if no CRITICAL or HIGH findings remain.`,
+    prompt: (run) => !hasSpecSet(run)
+      ? `Run a post-implementation verification gate on ${requirementRef(run)}\nThere is no spec set; verify the commits on this branch against that requirement and its acceptance criteria, plus the constitution (if present): (A) every claimed change exists in the files it names; (B) each acceptance criterion has implementation evidence in code; (C) each has a real test; (D) behaviour matches the requirement's stated expectations. If you find fixable gaps, fix them, keep tests green, and commit. Then write your final verdict as JSON to .autodev/verify.json in the repo root: {"verdict":"PASS"|"FAIL","findings":[{"id":"C1","category":"...","severity":"CRITICAL"|"HIGH"|"MEDIUM"|"LOW","summary":"..."}]}. PASS only if no CRITICAL or HIGH findings remain.`
+      : `Run a post-implementation verification gate on ${specRef(run)}. Follow .specify/extensions/verify/commands/verify.md (the /speckit.verify.run command) if it exists in this repo; otherwise verify yourself against spec.md, plan.md, tasks.md and the constitution (if present): (A) task truthfulness — every ticked task's referenced files exist and contain the claimed change; (B) requirement coverage — each functional requirement has implementation evidence in code; (C) scenario/test coverage — acceptance scenarios and edge cases map to real tests; (D) spec intent — behaviour matches acceptance criteria, including spec revisions made after implementation started. If you find fixable gaps: append new unchecked checkbox tasks to tasks.md (never edit or delete existing entries), implement them, tick them, keep tests green, and commit. Then write your final verdict as JSON to .autodev/verify.json in the repo root: {"verdict":"PASS"|"FAIL","findings":[{"id":"C1","category":"...","severity":"CRITICAL"|"HIGH"|"MEDIUM"|"LOW","summary":"..."}]}. PASS only if no CRITICAL or HIGH findings remain.`,
     check: (run) => {
       const p = join(run.worktree, '.autodev/verify.json');
       need(existsSync(p), 'verify.json not written by verify session');

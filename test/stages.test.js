@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
 import { STAGES, scheduledStages, findSpecDir, specDirOf, detectTestCmd, specDirFor, isCompleteSpecDir,
-         markerSubdirs, hasTestSources, untilStage } from '../src/stages.js';
+         markerSubdirs, hasTestSources, untilStage, hasSpecSet } from '../src/stages.js';
 import { git, commit } from './helpers.js';
 
 function gitRepo() {
@@ -265,4 +265,29 @@ test('untilStage precedence: --until row > .autodev.json "until" > "push":false 
   assert.equal(untilStage({ push: false }, null), 4);
   assert.equal(untilStage({}, null), 7);
   assert.equal(untilStage({ deploy: { merge: true } }, null), 8);
+});
+
+test('spec-less run: implement and verify work from the requirement, and the commit is the check', () => {
+  // Skipping the Spec stage (.autodev.json "skip") left Implement demanding a tasks.md that was
+  // never written — run #9 parked on ENOENT specs/066-…/tasks.md after making its change.
+  const wt = gitRepo();
+  const run = { worktree: wt, requirement: 'SCRUM-75: heading too large', jira_key: 'SCRUM-75' };
+  assert.equal(hasSpecSet(run), false);
+  assert.match(STAGES[2].prompt(run), /no spec set.*SCRUM-75: heading too large/s);
+  assert.doesNotMatch(STAGES[2].prompt(run), /tasks\.md/);
+  assert.match(STAGES[3].prompt(run), /no spec set/);
+  assert.match(STAGES[3].prompt(run), /verify\.json/);
+  // nothing committed yet: the session did nothing
+  assert.throws(() => STAGES[2].check(run), /no commit made/);
+  writeFileSync(join(wt, 'fix.txt'), 'smaller heading\n');
+  assert.throws(() => STAGES[2].check(run), /uncommitted/i);
+  git(wt, ['add', '-A'], commit('fix(login): heading from the type scale'));
+  STAGES[2].check(run); // no throw
+  // a complete spec set appearing later switches both stages back to it
+  const d = join(wt, 'specs/001-x'); mkdirSync(d, { recursive: true });
+  for (const f of ['spec.md', 'plan.md']) writeFileSync(join(d, f), '# x\n');
+  writeFileSync(join(d, 'tasks.md'), '- [x] T001 done\n');
+  git(wt, ['add', '-A'], commit('spec'));
+  assert.equal(hasSpecSet(run), true);
+  assert.match(STAGES[2].prompt(run), /tasks\.md/);
 });
