@@ -45,3 +45,11 @@ ceremony the pipeline paid for and the operator never read.
   operator's repo already asks for conventional commits per task.
 - Auth preflight for stub CLIs in the test suite: stubs answer `auth status` like an old
   CLI (exit 1, no JSON) and are ignored, so no existing test counts an extra session.
+
+## Amendment 2026-09-10 — the board shows work in progress
+
+- **FR-009** The Jira queue moves a RUNNING run's ticket into the *indeterminate* status
+  category (In Progress on a default board) on the first tick that sees it, once. Before
+  this a ticket went To Do → Done in one jump and the board showed nothing for the whole
+  run. Category-based, not name-based; a ticket already past To Do is left alone; a
+  failure is logged and retried next tick and never blocks closing finished runs.

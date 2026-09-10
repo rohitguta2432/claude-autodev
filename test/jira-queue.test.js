@@ -23,9 +23,11 @@ function stubJira({ failAttach = false } = {}) {
       const reply = (code, json) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(json === undefined ? '' : JSON.stringify(json)); };
       if (req.url.includes('/attachments')) return reply(failAttach ? 500 : 200, failAttach ? { errorMessages: ['nope'] } : [{ id: '1' }]);
       if (req.url.endsWith('/comment')) return reply(201, { id: '9' });
-      if (req.url.includes('/transitions') && req.method === 'GET') return reply(200, { transitions: [{ id: '41', to: { statusCategory: { key: 'done' } } }] });
+      if (req.url.includes('/transitions') && req.method === 'GET') return reply(200, { transitions: [
+        { id: '21', to: { statusCategory: { key: 'indeterminate' } } }, { id: '41', to: { statusCategory: { key: 'done' } } }] });
       if (req.url.includes('/transitions')) return reply(204);
-      if (req.url.includes('?fields=status')) return reply(200, { fields: { status: { statusCategory: { key: 'indeterminate' } } } });
+      // Issue -901 sits in To Do; everything else is already In Progress.
+      if (req.url.includes('?fields=status')) return reply(200, { fields: { status: { statusCategory: { key: /-901\?/.test(req.url) ? 'new' : 'indeterminate' } } } });
       if (req.url.includes('/search/jql')) return reply(200, { issues: [] });
       reply(404, {});
     });
@@ -154,4 +156,26 @@ test('overlapping ticks collapse into one — a run cannot be announced twice', 
   server.close();
   assert.equal(a, b); // same tick, same result object
   assert.equal(log.filter(e => e.url.endsWith('/comment')).length, 1);
+});
+
+test('a RUNNING run moves its To Do ticket to In Progress exactly once; an In Progress one is left alone', async () => {
+  const { server, log, base } = await stubJira();
+  const repoPath = mkdtempSync(join(tmpdir(), 'repo-'));
+  const db = openDb();
+  const a = createRun(db, { slug: 'a', repo: 'demo', repo_path: repoPath, worktree: repoPath, branch: 'b', requirement: 'r', issue_ref: 'SCRUM-901' });
+  const b = createRun(db, { slug: 'b', repo: 'demo', repo_path: repoPath, worktree: repoPath, branch: 'b', requirement: 'r', issue_ref: 'SCRUM-902' });
+  db.close();
+  configure(base, repoPath);
+  await tick({ reconcileOnly: true });
+  const posts = () => log.filter(e => e.method === 'POST' && e.url.includes('/transitions')).map(e => [e.url.split('/')[5], JSON.parse(e.body).transition.id]);
+  assert.deepEqual(posts(), [['SCRUM-901', '21']], 'only the To Do ticket is transitioned, via the indeterminate-category transition');
+  await tick({ reconcileOnly: true });
+  assert.equal(posts().length, 1, 'the second tick does not transition again');
+  // Finishing still closes both, regardless of the earlier In Progress mark.
+  const db2 = openDb();
+  updateRun(db2, a, { status: 'DONE', stage: 8 }); updateRun(db2, b, { status: 'DONE', stage: 8 });
+  db2.close();
+  await tick({ reconcileOnly: true });
+  assert.deepEqual(posts().filter(([, id]) => id === '41').map(([k]) => k).sort(), ['SCRUM-901', 'SCRUM-902']);
+  server.close();
 });

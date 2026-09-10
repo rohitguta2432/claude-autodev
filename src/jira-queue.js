@@ -132,12 +132,19 @@ export async function openStories(cfg) {
   }));
 }
 
-async function transitionDone(cfg, key) {
+// Move an issue into a status CATEGORY (Jira's three: new, indeterminate, done) via the
+// first transition that lands there — the category is stable across boards, the status
+// names are not. Idempotent: an issue already in the category is left alone.
+async function transitionTo(cfg, key, category) {
+  const issue = await jira(cfg, 'GET', `/rest/api/3/issue/${key}?fields=status`);
+  if (issue.fields.status?.statusCategory?.key === category) return false;
   const d = await jira(cfg, 'GET', `/rest/api/3/issue/${key}/transitions`);
-  const t = (d.transitions || []).find(x => x.to?.statusCategory?.key === 'done');
-  if (!t) throw new Error(`no done-category transition on ${key}`);
+  const t = (d.transitions || []).find(x => x.to?.statusCategory?.key === category);
+  if (!t) throw new Error(`no ${category}-category transition on ${key}`);
   await jira(cfg, 'POST', `/rest/api/3/issue/${key}/transitions`, { transition: { id: t.id } });
+  return true;
 }
+const transitionDone = (cfg, key) => transitionTo(cfg, key, 'done');
 
 const terminal = (s) => s === 'DONE' || s === 'BLOCKED' || s === 'REJECTED';
 
@@ -209,6 +216,21 @@ async function tickOnce({ onEvent, reconcileOnly = false } = {}) {
     // 1. reconcile — announce each terminal run's outcome exactly once. For a finished run the
     //    order is attach → comment → transition: the evidence is on the ticket before the
     //    status changes, and an upload failure leaves the ticket open for the next tick.
+    // 0. a run that is working moves its ticket to In Progress, once. Before this the
+    //    board showed nothing for the whole run — a ticket went To Do → Done in one jump,
+    //    and whoever watched the board could not tell a queued ticket from one being built.
+    //    Category-based (indeterminate), so it survives a renamed column; a failure is
+    //    logged and retried next tick, never a reason to stop closing finished runs.
+    for (const run of runs) {
+      if (run.status !== 'RUNNING' || st.notified[run.id]) continue;
+      const key = String(run.issue_ref);
+      try {
+        const moved = await transitionTo(cfg, key, 'indeterminate');
+        if (moved) log(`${key} → In Progress (run #${run.id})`);
+        st.notified[run.id] = 'RUNNING';
+      } catch (e) { log(`${key}: could not mark In Progress — ${String(e.message || e).slice(0, 120)}`); }
+    }
+    // 1. reconcile — announce each terminal run's outcome exactly once.
     for (const run of runs) {
       if (!terminal(run.status)) continue;
       if (st.notified[run.id] === run.status) continue;
@@ -218,8 +240,7 @@ async function tickOnce({ onEvent, reconcileOnly = false } = {}) {
         const attached = await attachProof(cfg, key, dir, log);
         const { body } = outcomeFor(run, gatherProof(dir, attached));
         await jira(cfg, 'POST', `/rest/api/3/issue/${key}/comment`, { body });
-        const issue = await jira(cfg, 'GET', `/rest/api/3/issue/${key}?fields=status`);
-        if (issue.fields.status?.statusCategory?.key !== 'done') await transitionDone(cfg, key);
+        await transitionDone(cfg, key);
         log(`${key} → Done with ${attached.length} attachment(s) (run #${run.id})`);
       } else {
         const { body } = outcomeFor(run);
