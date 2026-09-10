@@ -57,3 +57,12 @@ Two defaults were tuned for a cautious first user and are wrong for this operato
 Without a ceiling, a run's spend is bounded only by the retry budget, the 45-minute stage
 timeout and the 6-hour wall clock. On Opus at max effort a full run costs several times what
 the Sonnet runs did. The operator has accepted this; `autodev cost <id>` remains the readout.
+
+## Amendment — the default is Fable 5 (2026-09-10)
+
+The rule this spec records is "the strongest model at the highest effort, with no ceiling".
+When it shipped, that was `claude-opus-5`. `DEFAULT_MODEL` in `src/config.js` is now
+`claude-fable-5`, which is what every run since #9 has actually used (its session lines read
+"claude-fable-5 · max effort"). The rule is unchanged; the model it names follows the family.
+`test/config.test.js` asserts the new literal. Repo-wide `model`, per-stage `stageModels` and
+the `AUTODEV_CLAUDE_MODEL` pin all still outrank it, in that order.

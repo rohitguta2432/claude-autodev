@@ -81,6 +81,10 @@ function runClaude(prompt, stageN) {
   const [file, argv] = bin.endsWith('.js') ? [process.execPath, [bin, ...args]] : [bin, args];
   const attempt = (sessionSeq.get(stageN) ?? 0) + 1;
   sessionSeq.set(stageN, attempt);
+  // Announce the executing model the moment the session spawns — metrics only arrive after
+  // the session ends, which is too late for the dashboard's "what's running now" view.
+  ev({ type: 'session', stage: stageN, attempt, model, effort,
+       detail: `${model} · ${effort} effort (attempt ${attempt})` });
   const t0 = Date.now();
   let raw;
   try {

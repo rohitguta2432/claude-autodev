@@ -22,7 +22,7 @@
   button:hover { filter:brightness(1.06); }
 
   /* ---- header ---- */
-  header { display:grid; grid-template-columns:1fr auto 1fr; align-items:center;
+  header { display:grid; grid-template-columns:1fr auto 1fr; align-items:center; gap:16px;
            padding:14px 26px; border-bottom:1px solid var(--line); background:var(--card); }
   header b { font-size:19px; letter-spacing:.5px; text-align:center; } header b i { color:var(--acc); font-style:normal; }
   .hdr-back { font:600 10px/1 "IBM Plex Mono",monospace; letter-spacing:1.5px; text-transform:uppercase;
@@ -35,15 +35,32 @@
   #clock { color:var(--mut); }
 
   /* ---- board (assembly line) ---- */
-  #board { display:grid; grid-template-columns:repeat(7,1fr); gap:12px; padding:18px 26px; min-height:60vh; }
-  .col h4 { font:600 10px/1 "IBM Plex Mono",monospace; letter-spacing:2px; color:var(--mut); text-transform:uppercase;
-            border-bottom:2px solid var(--line); padding-bottom:7px; margin-bottom:9px; }
+  /* minmax(0,1fr): a card's long unbroken text (e.g. a JSON blocked_reason) must never
+     stretch its column and crush the other six. */
+  #board { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:12px; padding:18px 26px; min-height:60vh; }
+  /* flex-end + min-height: a wrapping title ("03 Implement") keeps its rule on the same
+     baseline as the single-line columns instead of dropping it a row. */
+  .col h4 { font:600 10px/1.4 "IBM Plex Mono",monospace; letter-spacing:2px; color:var(--mut); text-transform:uppercase;
+            border-bottom:2px solid var(--line); padding-bottom:7px; margin-bottom:9px;
+            display:flex; align-items:flex-end; gap:6px; min-height:35px; }
+  .col h4 .t { flex:1; min-width:0; }
+  /* per-stage skip toggle — sets whether NEW runs start with this stage skipped */
+  .col h4 .sk { background:none; border:1px solid var(--line); border-radius:4px; color:var(--mut);
+                font:600 10px/1 "IBM Plex Mono",monospace; padding:2px 4px; cursor:pointer;
+                opacity:0; transition:opacity .12s; flex:0 0 auto; }
+  .col:hover h4 .sk { opacity:1; }
+  .col h4 .sk:hover { border-color:var(--acc); color:var(--acc); filter:none; }
+  .col h4 .sk.on { opacity:1; border-color:#f0c8c3; color:var(--bad); background:#fbeeec; }
+  .col.skipped h4 { border-bottom-style:dashed; }
+  .col.skipped h4 .t { text-decoration:line-through; }
   .card { background:var(--card); border:1px solid var(--line); border-left:3px solid var(--acc);
           border-radius:8px; padding:10px; margin-bottom:9px; cursor:pointer; font-size:12px;
           box-shadow:0 1px 2px rgba(22,32,46,.05); transition:box-shadow .12s,transform .12s; }
   .card:hover { box-shadow:0 4px 12px rgba(22,32,46,.10); transform:translateY(-1px); }
   .card.BLOCKED { border-left-color:var(--bad); } .card .repo { color:var(--mut); }
-  .card .st { font-family:"IBM Plex Mono",monospace; font-size:11px; color:var(--mut); margin-top:4px; }
+  .card b { overflow-wrap:anywhere; }
+  .card .st { font-family:"IBM Plex Mono",monospace; font-size:11px; color:var(--mut); margin-top:4px;
+              overflow-wrap:anywhere; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
 
   /* ---- ticker ---- */
   #ticker { position:fixed; bottom:0; left:0; right:0; background:var(--card); border-top:1px solid var(--line);
@@ -95,7 +112,7 @@
   .fp-head h3 { font:600 11px/1 "IBM Plex Mono",monospace; letter-spacing:1.5px; text-transform:uppercase; }
   .fp-head .sub, .fp-head .tot { font:11px "IBM Plex Mono",monospace; color:var(--mut); }
   .fp-head .tot b { color:var(--ink); }
-  .fp { display:grid; grid-template-columns:repeat(7,1fr); gap:10px; }
+  .fp { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:10px; }
   .fp-card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 11px 12px;
              position:relative; overflow:hidden; cursor:pointer; transition:box-shadow .12s; }
   .fp-card:hover { box-shadow:0 3px 10px rgba(22,32,46,.10); }
@@ -198,6 +215,53 @@
   .blocked p { color:var(--bad); font:12px "IBM Plex Mono",monospace; margin-bottom:9px; }
   .empty { color:var(--mut); font-size:12px; padding:6px 0; }
 
+  /* ---- jira queue panel ---- */
+  #jira { padding:14px 26px 0; }
+  .jq { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:13px 16px; }
+  /* identity on the left, actions kept together on the right — the action group wraps as a
+     unit and stays right-aligned instead of scattering buttons across a second row. */
+  .jq-h { display:flex; align-items:center; gap:10px 14px; flex-wrap:wrap; }
+  .jq-h h3 { font-size:14px; font-weight:600; }
+  .jq-h .st { font:600 10px "IBM Plex Mono",monospace; letter-spacing:1px; }
+  .jq-h .st.on { color:var(--ok); } .jq-h .st.off { color:var(--mut); }
+  .jq-h .site { font:11px "IBM Plex Mono",monospace; color:var(--mut);
+                overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+  .jq-acts { margin-left:auto; display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+  .jq-h .next { font:11px "IBM Plex Mono",monospace; color:var(--slate); white-space:nowrap; }
+  .jq-h button { padding:6px 12px; font-size:12px; white-space:nowrap; }
+  .jq-h button.ghostbtn { background:none; color:var(--slate); border:1px solid var(--line); }
+  .jq-h button.ghostbtn:hover { border-color:var(--acc); color:var(--acc); filter:none; }
+  .jq-h button.danger { background:none; color:var(--bad); border:1px solid #f0c8c3; }
+  .jq-h button.danger:hover { background:#fbeeec; filter:none; }
+  /* auto-fit: four fields on a wide window, fewer as it narrows — never a squeezed row */
+  .jq-form { display:none; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:10px 12px; margin-top:12px;
+             border-top:1px dashed var(--line2); padding-top:12px; align-items:end; }
+  .jq-form.open { display:grid; }
+  .jq-form label { font:600 9px/1 "IBM Plex Mono",monospace; letter-spacing:1px; text-transform:uppercase; color:var(--mut); display:block; margin-bottom:4px; }
+  .jq-form input { width:100%; font:12px "IBM Plex Mono",monospace; color:var(--ink); background:var(--bg);
+                   border:1px solid var(--line); border-radius:6px; padding:7px 9px; }
+  .jq-form input:focus { outline:none; border-color:var(--acc); }
+  .jq-form .full { grid-column:1 / -1; }
+  .jq-policy { margin-top:11px; font-size:12px; color:var(--slate); }
+  .jq-policy b { color:var(--ink); }
+  .jq-stories { margin-top:10px; border-top:1px dashed var(--line2); padding-top:8px; }
+  .jq-row { display:flex; gap:10px; align-items:center; padding:5px 0; font:12px "IBM Plex Sans",sans-serif;
+            border-bottom:1px dashed var(--line2); }
+  .jq-row:last-child { border-bottom:0; }
+  .jq-row .key { font:600 11px "IBM Plex Mono",monospace; color:var(--acc); flex:0 0 auto; }
+  .jq-row .sum { color:var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .jq-row .chip { margin-left:auto; flex:0 0 auto; }
+  .jq-log { margin-top:8px; font:10px "IBM Plex Mono",monospace; color:var(--mut); }
+  .jq-log div { padding:1.5px 0; }
+  .card .x { display:none; float:right; background:none; border:0; color:var(--mut); font:12px "IBM Plex Mono",monospace;
+             cursor:pointer; padding:0 2px; }
+  .card:hover .x { display:inline; } .card .x:hover { color:var(--bad); }
+  .rd-actions { margin-left:auto; display:flex; gap:8px; }
+  .rd-actions button { font:600 10px "IBM Plex Mono",monospace; letter-spacing:1px; padding:7px 12px; }
+  .rd-actions .stop { background:var(--bad); }
+  .rd-actions .clearrun { background:none; color:var(--bad); border:1px solid #f0c8c3; }
+  .rd-actions .clearrun:hover { background:#fbeeec; filter:none; }
+
   @media (max-width:820px) {
     .rd-body { grid-template-columns:1fr; } .rd-meta { grid-template-columns:repeat(3,1fr); }
     .fp { grid-template-columns:repeat(3,1fr); } .ghost { display:none; }
@@ -211,12 +275,16 @@
   <b>autodev<i>_</i></b>
   <div class="hdr-right"><span id="counts"></span><span id="clock"></span></div>
 </header>
+<div id="jira"></div>
 <div id="board"></div>
 <div id="detail"></div>
 <div id="ticker"><span class="dot">●</span> LIVE</div>
 
 <script>
-const TITLES = ['Spec','Analyze','Implement','Verify','Push','Review','Test'];
+const TITLES = ['Spec','Analyze','Implement','Verify','Push','Review','Test','Deploy'];
+// The board's columns: what the configured repo actually schedules (Deploy is opt-in),
+// replaced by /api/stages on load. Skips come from the queue config.
+let BOARD = TITLES.slice(0, 7).map((t, i) => ({ n: i + 1, title: t }));
 const WD = ['SUN','MON','TUE','WED','THU','FRI','SAT'];
 const MO = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
 let runs = [], open = null, openRun = null;
@@ -249,6 +317,22 @@ async function load() {
   render();
   if (open) renderDetail(open);
 }
+async function loadStages() {
+  try {
+    const s = await (await fetch('/api/stages')).json();
+    if (s.stages?.length) BOARD = s.stages;
+    deployOn = s.deploy;
+  } catch { /* keep the 7-stage default */ }
+  render(); renderJira();
+}
+// Per-stage skip: a toggle on the board header, applied to every run the queue starts next.
+async function toggleSkip(n) {
+  const cur = new Set(jq?.skipStages || []);
+  cur.has(n) ? cur.delete(n) : cur.add(n);
+  await post('/api/jira/config', { skipStages: [...cur] });
+  await loadJira();
+  render();
+}
 function render() {
   const counts = { RUNNING:0, BLOCKED:0, DONE:0 };
   runs.forEach(r => counts[r.status] = (counts[r.status]||0)+1);
@@ -256,9 +340,15 @@ function render() {
     `<span class="dot" style="color:${counts.RUNNING?'var(--ok)':'var(--mut)'}">●</span> ` +
     `${counts.RUNNING||0} running · ${counts.BLOCKED||0} blocked · ${counts.DONE||0} done`;
   const board = document.getElementById('board');
-  board.innerHTML = TITLES.map((t,i) => `<div class="col"><h4>0${i+1} ${t}</h4>${
-    runs.filter(r => r.stage === i+1 && r.status !== 'DONE').map(r => `
+  const skips = new Set(jq?.skipStages || []);
+  board.style.gridTemplateColumns = `repeat(${BOARD.length},minmax(0,1fr))`;
+  board.innerHTML = BOARD.map(({n,title}) => `<div class="col${skips.has(n) ? ' skipped' : ''}">
+    <h4><span class="t">0${n} ${esc(title)}</span>
+      <button class="sk${skips.has(n) ? ' on' : ''}" title="${skips.has(n) ? `new runs skip ${esc(title)} — click to run it again` : `skip ${esc(title)} on new runs`}"
+        onclick="toggleSkip(${n})">${skips.has(n) ? '⇥' : '⇥'}</button></h4>${
+    runs.filter(r => r.stage === n && r.status !== 'DONE').map(r => `
       <div class="card ${esc(r.status)}" onclick="renderDetail(${r.id})">
+        <button class="x" title="clear this run" onclick="event.stopPropagation();clearRun(${r.id})">✕</button>
         <b>#${String(r.id).padStart(3,'0')} ${esc(r.slug)}</b>
         ${r.issue_type ? `<span class="badge ${esc(r.issue_type)}">${esc(r.issue_type.toUpperCase())}</span>` : ''}<br>
         <span class="repo">${esc(r.repo)} · ${esc(r.status)}</span>
@@ -329,12 +419,14 @@ function renderTasks(tasks) {
 }
 
 const fmtTok = (n) => n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1000 ? (n/1000).toFixed(1)+'k' : String(n);
-// stage n -> summed telemetry from metrics events (one per claude call — retries included)
+// stage n -> summed telemetry from metrics events (one per claude call — retries included);
+// session events contribute the model only, so a live stage names its model before metrics land.
 function stageMetrics(events) {
   const m = {};
   for (const e of events || []) {
-    if (e.type !== 'metrics') continue;
+    if (e.type !== 'metrics' && e.type !== 'session') continue;
     const s = m[e.stage] = m[e.stage] || { tin:0, tout:0, cost:0, models:new Set(), calls:0 };
+    if (e.type === 'session') { if (e.model) s.models.add(e.model); continue; }
     s.tin += e.tokens_in || 0; s.tout += e.tokens_out || 0; s.cost += e.cost_usd || 0;
     if (e.model) e.model.split(' + ').forEach(x => s.models.add(x));
     s.calls++;
@@ -437,7 +529,8 @@ async function skipTo(n) {
 }
 
 const VERB = { stage_started:'stage started', stage_done:'stage done', pr_opened:'PR opened',
-               run_done:'run done', parked:'blocked', resumed:'resumed', retry:'retry', skipped:'skipped', activity:'' };
+               run_done:'run done', parked:'blocked', resumed:'resumed', retry:'retry', skipped:'skipped',
+               session:'model', activity:'' };
 function feedRow(e) {
   const verb = VERB[e.type] ?? e.type;
   const detail = e.detail ? (verb ? ' — ' + esc(e.detail) : esc(e.detail)) : '';
@@ -505,6 +598,10 @@ async function renderDetail(id) {
           : `<span class="mono">${esc(r.jira_key)}</span>`) : ''}
         <span>Stage ${r.stage} of 7 — <b>${TITLES[r.stage-1] || ''}</b></span>
         <span class="wt mono">${esc(r.worktree)}</span>
+        <span class="rd-actions" style="border-left:0">
+          ${r.status === 'RUNNING' ? `<button class="stop" onclick="stopRun(${r.id})">■ STOP</button>` : ''}
+          <button class="clearrun" onclick="clearRun(${r.id})">✕ CLEAR RUN</button>
+        </span>
       </div>
     </div>
 
@@ -545,11 +642,121 @@ async function renderDetail(id) {
     </div>`;
 }
 
+// ---- run controls ----
+const post = (path, body) => fetch(path, { method:'POST',
+  headers:{'content-type':'application/json','x-autodev-token':window.AUTODEV_TOKEN},
+  body: JSON.stringify(body || {}) });
+async function stopRun(id) {
+  if (!confirm(`Stop run #${id}? Its claude session is killed; the run parks as BLOCKED.`)) return;
+  const res = await post(`/api/runs/${id}/stop`);
+  if (!res.ok) return alert((await res.json()).error || 'stop failed');
+  load();
+}
+async function clearRun(id) {
+  if (!confirm(`Clear run #${id}? This stops it and deletes its worktree, branch, logs and history. Cannot be undone.`)) return;
+  const res = await post(`/api/runs/${id}/delete`);
+  if (!res.ok) return alert((await res.json()).error || 'clear failed');
+  if (open === id) closeDetail();
+  load(); loadJira();
+}
+
+// ---- jira queue panel ----
+let jq = null, jqStories = [], jqFormOpen = false, deployOn = false;
+function jqCountdown() {
+  if (!jq || !jq.enabled || !jq.nextTick) return '';
+  const ms = jq.nextTick - Date.now();
+  return ms > 0 ? `next poll in ${clock(ms)}` : 'polling…';
+}
+function storyChip(s) {
+  if (!s.run) return '<span class="chip">open</span>';
+  const col = { RUNNING:'var(--ok)', BLOCKED:'var(--bad)', DONE:'var(--acc)' }[s.run.status] || 'var(--slate)';
+  return `<span class="chip" style="color:${col};cursor:pointer" onclick="renderDetail(${s.run.id})">run #${s.run.id} · ${esc(s.run.status)}</span>`;
+}
+function renderJira() {
+  const el = document.getElementById('jira');
+  if (!jq) { el.innerHTML = ''; return; }
+  const site = jq.baseUrl ? `${esc(jq.project || '?')} @ ${esc(jq.baseUrl.replace(/^https?:\/\//,''))}` : 'not configured';
+  el.innerHTML = `<div class="jq">
+    <div class="jq-h">
+      <h3>Jira queue</h3>
+      <span class="st ${jq.enabled ? 'on' : 'off'}">● ${jq.enabled ? 'POLLING' : 'OFF'}</span>
+      <span class="site">${site}${jq.repoPath ? ` → ${esc(jq.repoPath.split('/').pop())}` : ''}</span>
+      <span class="jq-acts">
+        <span class="next" id="jq-next">${jqCountdown()}</span>
+        <button onclick="jqToggle()">${jq.enabled ? 'DISABLE' : 'ENABLE'}</button>
+        <button class="ghostbtn" onclick="jqTick(this)">POLL NOW</button>
+        <button class="ghostbtn" onclick="jqFormOpen=!jqFormOpen;renderJira()">SETTINGS</button>
+        <button class="danger" onclick="jqClear()">CLEAR ALL DATA</button>
+      </span>
+    </div>
+    <div class="jq-form ${jqFormOpen ? 'open' : ''}">
+      <div class="full"><label>Jira site URL</label><input id="jf-base" value="${esc(jq.baseUrl)}" placeholder="https://yourteam.atlassian.net"></div>
+      <div><label>Email</label><input id="jf-email" value="${esc(jq.email)}"></div>
+      <div><label>API token</label><input id="jf-token" type="password" placeholder="${jq.hasToken ? (jq.tokenFromEnv ? 'using token from shell env' : 'saved — paste to replace') : 'paste Jira API token'}"></div>
+      <div><label>Project key</label><input id="jf-project" value="${esc(jq.project)}" placeholder="SCRUM"></div>
+      <div><label>Poll every (min)</label><input id="jf-interval" type="number" min="1" value="${jq.intervalMin}"></div>
+      <div class="full"><label>Repository path</label><input id="jf-repo" value="${esc(jq.repoPath)}" placeholder="/path/to/repo"></div>
+      <div><label>Test command</label><input id="jf-test" value="${esc(jq.testCmd)}" placeholder="npm test"></div>
+      <div><label>Max parallel runs</label><input id="jf-par" type="number" min="1" value="${jq.maxParallel}"></div>
+      <div class="full" style="display:flex;justify-content:flex-end"><button onclick="jqSave()">SAVE SETTINGS</button></div>
+    </div>
+    <div class="jq-policy">Ticket closes when a run reaches <b>${esc(BOARD.at(-1)?.title || 'Test')}</b>${
+      deployOn ? ' — merged and deployed' : ' — no deploy stage in this repo, so Done means tested, not shipped'}.${
+      jq.skipStages?.length ? ` Skipping ${jq.skipStages.map(n => esc(TITLES[n-1])).join(', ')} on new runs.` : ''}</div>
+    <div class="jq-stories">${
+      jqStories.length
+        ? jqStories.map(s => `<div class="jq-row"><span class="key">${esc(s.key)}</span><span class="sum">${esc(s.summary)}</span>${storyChip(s)}</div>`).join('')
+        : `<div class="empty">${jq.enabled || jq.hasToken ? 'no open stories on the board' : 'configure and enable to pull work from Jira'}</div>`}
+    </div>
+    ${jq.log?.length ? `<div class="jq-log">${jq.log.slice(-6).reverse().map(l =>
+      `<div>${timeOf(l.ts)} ▸ ${esc(l.msg)}</div>`).join('')}</div>` : ''}
+  </div>`;
+}
+async function loadJira() {
+  try {
+    jq = await (await fetch('/api/jira')).json();
+    renderJira(); // paint controls immediately; stories fill in when the fetch lands
+    if (jq.hasToken && jq.project && jq.baseUrl) {
+      const res = await fetch('/api/jira/stories');
+      jqStories = res.ok ? await res.json() : [];
+    } else jqStories = [];
+  } catch { jqStories = []; }
+  renderJira();
+}
+async function jqToggle() {
+  await post('/api/jira/config', { enabled: !jq.enabled });
+  loadJira();
+}
+async function jqSave() {
+  const v = (id) => document.getElementById(id).value.trim();
+  await post('/api/jira/config', {
+    baseUrl: v('jf-base').replace(/\/$/, ''), email: v('jf-email'), apiToken: v('jf-token'),
+    project: v('jf-project'), repoPath: v('jf-repo'), testCmd: v('jf-test'),
+    intervalMin: Number(v('jf-interval')) || 15, maxParallel: Number(v('jf-par')) || 1,
+  });
+  jqFormOpen = false;
+  await loadJira();
+  loadStages(); // the repo may have changed — its pipeline decides the board's columns
+}
+async function jqTick(btn) {
+  btn.textContent = 'POLLING…'; btn.disabled = true;
+  try { await post('/api/jira/tick'); } finally { btn.textContent = 'POLL NOW'; btn.disabled = false; }
+  load(); loadJira();
+}
+async function jqClear() {
+  if (!confirm('Clear ALL data? Every pipeline run is stopped and deleted (worktrees, branches, logs, history) and the queue state resets. Cannot be undone.')) return;
+  await post('/api/runs/clear-all');
+  closeDetail();
+  load(); loadJira();
+}
+
 new EventSource('/stream').onmessage = (m) => {
   const e = JSON.parse(m.data);
-  document.getElementById('ticker').innerHTML =
-    `<span class="dot">●</span> LIVE  ${timeOf(e.ts)}  #${e.run} ${esc(e.type)} ${esc(e.detail ?? '')}`;
+  document.getElementById('ticker').innerHTML = e.type === 'jira'
+    ? `<span class="dot">●</span> LIVE  ${timeOf(e.ts)}  jira ${esc(e.detail ?? '')}`
+    : `<span class="dot">●</span> LIVE  ${timeOf(e.ts)}  #${e.run} ${esc(e.type)} ${esc(e.detail ?? '')}`;
   load();
+  if (e.type === 'jira' || e.type === 'deleted' || e.type === 'run_done') loadJira();
 };
 
 // 1s tick: header clock always; live elapsed + current-stage timer when a running detail is open.
@@ -559,10 +766,13 @@ setInterval(() => {
     const el = document.getElementById('m-elapsed'); if (el) el.textContent = human(Date.now() - openRun.created_at);
     const ls = document.getElementById('live-stage'); if (ls) ls.textContent = clock(Date.now() - Number(ls.dataset.start));
   }
+  const jn = document.getElementById('jq-next'); if (jn) jn.textContent = jqCountdown();
 }, 1000);
 
 document.getElementById('clock').textContent = fmtClock();
 load();
+loadJira().then(loadStages); // stages render with the queue's skip flags, so load them in order
+setInterval(loadJira, 60_000); // countdown uses nextTick; a minutely refresh keeps stories honest
 </script>
 </body>
 </html>
