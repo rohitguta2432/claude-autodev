@@ -34,7 +34,7 @@ export function fetchIssue(key) {
     : ['-p', prompt, '--allowedTools', 'mcp__atlassian-jira__getJiraIssue'];
   // A .js AUTODEV_CLAUDE_BIN (test stubs) runs via node — extensionless scripts can't spawn on Windows.
   const [file, argv] = bin.endsWith('.js') ? [process.execPath, [bin, ...args]] : [bin, args];
-  const out = execFileSync(file, argv, { encoding: 'utf8', timeout: 120_000 });
+  const out = execFileSync(file, argv, { encoding: 'utf8', timeout: 120_000, windowsHide: true });
   const m = out.match(/\{[\s\S]*\}/); // strict-JSON ask, but tolerate surrounding chatter
   if (!m) throw new Error(`jira fetch returned no JSON for ${key}: ${out.slice(0, 200)}`);
   const issue = JSON.parse(m[0]);

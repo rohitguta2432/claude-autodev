@@ -21,7 +21,7 @@ export const LABELS = {
 };
 const ALL = Object.values(LABELS);
 
-const gh = (cwd, args) => execFileSync('gh', args, { cwd, encoding: 'utf8', timeout: 60_000 });
+const gh = (cwd, args) => execFileSync('gh', args, { cwd, encoding: 'utf8', timeout: 60_000, windowsHide: true });
 
 // gh exits non-zero for "no such label" as readily as for "no network"; a tick must survive
 // the first and report the second, and neither is worth stopping the daemon for.
@@ -147,8 +147,9 @@ export async function daemon({ repoPath, intervalMin = 30, maxParallel = 2, auto
   ensureLabels(repoPath, log);
   const spawnRun = (number) => {
     // Detached: the daemon must not die with a run, nor a run with the daemon.
+    // windowsHide: no-op on this detached launch; see bin/autodev.js ensureServer. Kept for the uniform invariant.
     spawn(process.execPath, [cliPath, 'run', '--repo', repoPath, '--issue', String(number)],
-      { detached: true, stdio: 'ignore', env: process.env }).unref();
+      { detached: true, stdio: 'ignore', env: process.env, windowsHide: true }).unref();
   };
   log(`autodev daemon — repo ${repoPath}, every ${intervalMin}m, up to ${maxParallel} run(s) in parallel${autoAccept ? ', auto-accepting new issues' : ''}`);
   for (;;) {

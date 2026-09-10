@@ -79,7 +79,7 @@ function badHost(req) {
 function killRunTree(run) {
   if (!run.pid) return;
   if (process.platform === 'win32') {
-    try { execFileSync('taskkill', ['/pid', String(run.pid), '/T', '/F'], { stdio: 'ignore' }); } catch {}
+    try { execFileSync('taskkill', ['/pid', String(run.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }); } catch {}
   } else {
     try { process.kill(-run.pid, 'SIGTERM'); }
     catch { try { process.kill(run.pid); } catch {} }
@@ -178,10 +178,10 @@ export async function startServer({ port = PORT(), dbPath } = {}) {
       const wipeRun = (run) => {
         if (pidAlive(run.pid)) killRunTree(run);
         if (run.worktree) {
-          try { execFileSync('git', ['worktree', 'remove', '--force', run.worktree], { cwd: run.repo_path, stdio: 'ignore' }); }
+          try { execFileSync('git', ['worktree', 'remove', '--force', run.worktree], { cwd: run.repo_path, stdio: 'ignore', windowsHide: true }); }
           catch { rmSync(run.worktree, { recursive: true, force: true }); }
         }
-        if (run.branch) { try { execFileSync('git', ['branch', '-D', run.branch], { cwd: run.repo_path, stdio: 'ignore' }); } catch {} }
+        if (run.branch) { try { execFileSync('git', ['branch', '-D', run.branch], { cwd: run.repo_path, stdio: 'ignore', windowsHide: true }); } catch {} }
         rmSync(runDir(run.id), { recursive: true, force: true });
         deleteRun(db, run.id);
         broadcast({ ts: Date.now(), run: run.id, type: 'deleted', detail: `run #${run.id} cleared` });
@@ -215,8 +215,9 @@ export async function startServer({ port = PORT(), dbPath } = {}) {
         updateRun(db, run.id, { stage, status: 'RUNNING', blocked_reason: null });
         mkdirSync(runDir(run.id), { recursive: true });
         const log = openSync(join(runDir(run.id), 'runner.log'), 'a');
+        // windowsHide: no-op on this detached launch; see bin/autodev.js ensureServer. Kept for the uniform invariant.
         spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), 'runner.js'), String(run.id), '--resume'],
-          { detached: true, stdio: ['ignore', log, log], env: process.env }).unref();
+          { detached: true, stdio: ['ignore', log, log], env: process.env, windowsHide: true }).unref();
         return json(200, { ok: true, stage });
       }
       // Skip: bypass a stage without running it. Records it as skipped; if it's the current
@@ -252,7 +253,7 @@ export async function startServer({ port = PORT(), dbPath } = {}) {
         if (fields.status === 'RUNNING') { // resumed past the skipped current stage — relaunch the runner
           const log = openSync(join(runDir(run.id), 'runner.log'), 'a');
           spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), 'runner.js'), String(run.id), '--resume'],
-            { detached: true, stdio: ['ignore', log, log], env: process.env }).unref();
+            { detached: true, stdio: ['ignore', log, log], env: process.env, windowsHide: true }).unref();
         }
         return json(200, { ok: true, skipped: fields.skipped, stage: fields.stage ?? run.stage });
       }

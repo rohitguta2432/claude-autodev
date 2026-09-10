@@ -166,7 +166,7 @@ function spawnRun(cfg, story, log) {
   if (cfg.testCmd) args.push('--test-cmd', cfg.testCmd);
   if (cfg.skipStages?.length) args.push('--skip', cfg.skipStages.join(','));
   const out = openSync(join(AUTODEV_HOME(), 'jira-queue-kickoff.log'), 'a');
-  const child = spawn(process.execPath, args, { detached: true, stdio: ['ignore', out, out], env: process.env });
+  const child = spawn(process.execPath, args, { detached: true, stdio: ['ignore', out, out], env: process.env, windowsHide: true });
   child.on('exit', (code) => { if (code) log(`kickoff for ${story.key} exited ${code} — see jira-queue-kickoff.log`); });
   child.unref();
 }

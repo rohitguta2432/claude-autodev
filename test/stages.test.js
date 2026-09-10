@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { STAGES, scheduledStages, findSpecDir, specDirOf, detectTestCmd, specDirFor, isCompleteSpecDir } from '../src/stages.js';
+import { execSync } from 'node:child_process';
+import { STAGES, scheduledStages, findSpecDir, specDirOf, detectTestCmd, specDirFor, isCompleteSpecDir,
+         markerSubdirs, hasTestSources, untilStage } from '../src/stages.js';
 import { git, commit } from './helpers.js';
 
 function gitRepo() {
@@ -110,7 +112,7 @@ test('detectTestCmd finds gradle at root and markers one level down', () => {
   writeFileSync(join(g, 'build.gradle'), '');
   assert.equal(detectTestCmd(g), 'gradle test');
   writeFileSync(join(g, 'gradlew'), '');
-  assert.match(detectTestCmd(g), /gradlew(\.bat)? test$/);
+  assert.equal(detectTestCmd(g), process.platform === 'win32' ? '.\\gradlew.bat test' : './gradlew test');
   // marker only in a subdir → command cd's into it
   const m = mkdtempSync(join(tmpdir(), 'p-'));
   mkdirSync(join(m, 'backend'));
@@ -121,6 +123,25 @@ test('detectTestCmd finds gradle at root and markers one level down', () => {
   mkdirSync(join(n, 'node_modules', 'x'), { recursive: true });
   writeFileSync(join(n, 'node_modules', 'x', 'pytest.ini'), '');
   assert.equal(detectTestCmd(n), null);
+});
+
+test('win32: the detected gradlew command survives NoDefaultCurrentDirectoryInExePath=1', { skip: process.platform !== 'win32' }, () => {
+  const g = mkdtempSync(join(tmpdir(), 'p-'));
+  writeFileSync(join(g, 'build.gradle'), '');
+  writeFileSync(join(g, 'gradlew'), '');
+  writeFileSync(join(g, 'gradlew.bat'), '@echo gradle-ok\r\n');
+  const env = { ...process.env, NoDefaultCurrentDirectoryInExePath: '1' };
+  // the bare form is exactly what that env var breaks...
+  assert.throws(() => execSync('gradlew.bat test', { cwd: g, env, stdio: 'pipe' }), /is not recognized/);
+  // ...and the detected form must keep working
+  assert.match(execSync(detectTestCmd(g), { cwd: g, env, encoding: 'utf8' }), /gradle-ok/);
+  // the composed subdir form (cd "<sub>" && .\gradlew.bat test) must survive it too
+  const s = mkdtempSync(join(tmpdir(), 'p-'));
+  mkdirSync(join(s, 'app'));
+  writeFileSync(join(s, 'app', 'build.gradle'), '');
+  writeFileSync(join(s, 'app', 'gradlew'), '');
+  writeFileSync(join(s, 'app', 'gradlew.bat'), '@echo gradle-ok\r\n');
+  assert.match(execSync(detectTestCmd(s), { cwd: s, env, encoding: 'utf8' }), /gradle-ok/);
 });
 
 test('detectTestCmd finds tox / requirements+tests / Makefile test target / csproj', () => {
@@ -212,4 +233,36 @@ test('push stage opens the PR as a DRAFT — review/test have not run at stage 5
   const run = { branch: 'b', requirement: 'q', jira_key: null, issue_type: null };
   assert.match(STAGES[4].prompt(run), /--draft/);
   assert.match(STAGES[4].prompt(run), /DRAFT pull request/);
+});
+
+test('markerSubdirs finds one-level subdirs with a test marker, skips dotdirs and node_modules', () => {
+  const wt = mkdtempSync(join(tmpdir(), 'ms-'));
+  mkdirSync(join(wt, 'backend'));
+  writeFileSync(join(wt, 'backend', 'pytest.ini'), '');
+  mkdirSync(join(wt, 'frontend'));
+  writeFileSync(join(wt, 'frontend', 'package.json'), JSON.stringify({ scripts: { test: 'x' } }));
+  mkdirSync(join(wt, 'nomarker'));
+  mkdirSync(join(wt, '.git'));
+  mkdirSync(join(wt, 'node_modules'));
+  assert.deepEqual(markerSubdirs(wt).sort(), ['backend', 'frontend']);
+});
+
+test('hasTestSources: root src/test, one-level subdir src/androidTest, or neither', () => {
+  const a = mkdtempSync(join(tmpdir(), 'hts-'));
+  mkdirSync(join(a, 'src', 'test'), { recursive: true });
+  assert.equal(hasTestSources(a), true);
+  const b = mkdtempSync(join(tmpdir(), 'hts-'));
+  mkdirSync(join(b, 'app', 'src', 'androidTest'), { recursive: true });
+  assert.equal(hasTestSources(b), true);
+  const c = mkdtempSync(join(tmpdir(), 'hts-'));
+  mkdirSync(join(c, 'src', 'main'), { recursive: true });
+  assert.equal(hasTestSources(c), false);
+});
+
+test('untilStage precedence: --until row > .autodev.json "until" > "push":false > last scheduled stage', () => {
+  assert.equal(untilStage({}, 3), 3);
+  assert.equal(untilStage({ until: 'analyze' }, null), 2);
+  assert.equal(untilStage({ push: false }, null), 4);
+  assert.equal(untilStage({}, null), 7);
+  assert.equal(untilStage({ deploy: { merge: true } }, null), 8);
 });

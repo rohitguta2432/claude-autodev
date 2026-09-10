@@ -31,6 +31,26 @@ pulled the next job. All four are here.
   the daemon is safe to restart mid-tick.
 - **`autodev run --issue <n>`** takes the requirement from a GitHub issue and
   records the mapping the daemon reconciles against.
+- **`worktreeCopy`** in `.autodev.json`: exact files (typically gitignored: SDK paths, `.env`,
+  keystores) copied from the main repo into each run's fresh worktree at kickoff, skipping
+  anything already tracked. A `git worktree add` checkout is tracked files only, which is
+  exactly where Android/JVM builds died; the list is an explicit allowlist, no globs and no
+  auto-discovery, so secrets move only because the operator named them. Copies are added to
+  the repo's shared `.git/info/exclude` (hiding them from `git status` in the main checkout
+  too) so autodev's own sessions cannot commit or push them, and `doctor` warns when common
+  build files sit untracked and unlisted.
+- **Doctor: config reachability.** Warns when `.autodev.json` is untracked,
+  gitignored, modified, or unparseable: a run reads the committed copy in its
+  worktree, so an uncommitted `maxCostUsd` is an unenforced one. The runner now
+  also logs the config it actually loaded at run start.
+- **Doctor: test-command honesty.** Warns when the detected test command is
+  likely vacuous (gradle/maven with no test sources exits 0 having run nothing)
+  or ambiguous (several subprojects carry test markers and detection runs only
+  the first), and names whether the command was detected or configured.
+- **Kickoff visibility and gh account check.** Kickoff prints what the run will
+  do to the world (push + draft PR, merge + deploy when configured) and how to
+  cap it; doctor warns when the active `gh` account does not own `origin` (stage
+  5 would push and PR from that account).
 
 - **Proof of shipping.** The runner keeps each gate's artifact under
   `runs/<id>/proof/` and records `merged`, `deployed` and `proof` events; the
@@ -56,6 +76,16 @@ pulled the next job. All four are here.
 ### Removed
 - `maxCostUsd`. A run is no longer parked on accumulated spend; `autodev cost`
   and the per-stage metrics remain the readout. (specs/003)
+
+### Fixed
+- Windows: child processes launched from the console-less detached runner and
+  the daemon-dispatched CLI (git, gh, claude, test and deploy commands) no
+  longer open a visible console window each; every launch site in src/ and
+  bin/ now passes windowsHide.
+- Windows: the detected gradle test command is now `.\gradlew.bat test` (explicit
+  relative path). A bare `gradlew.bat` never resolves from the worktree when
+  `NoDefaultCurrentDirectoryInExePath=1` is set, and the explicit form works
+  everywhere.
 
 ## Earlier — first green run
 

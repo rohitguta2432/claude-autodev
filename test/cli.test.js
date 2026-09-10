@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, readdirSync, mkdirSync, openSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, readdirSync, mkdirSync, openSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename, delimiter } from 'node:path';
 import { execSync, execFileSync, spawn } from 'node:child_process';
@@ -276,6 +276,31 @@ test('no launch site spawns a bare "node" — the interpreter must come from pro
   assert.deepEqual(offenders, [], `spawn a bare "node" at: ${offenders.join(', ')}`);
 });
 
+test('every child-process launch in src/ and bin/ hides its Windows console', () => {
+  // A console child of a console-less parent (detached runner/server, daemon-dispatched
+  // CLI) gets a fresh VISIBLE console window per launch on Windows; windowsHide is what
+  // suppresses it (and is a no-op both on POSIX and on the detached spawns themselves).
+  // Count-based on purpose: an options object with nested braces defeats a block regex.
+  // test/ is out of scope: its detached launches are console-less and their children
+  // inherit the hidden console. Only the sync APIs are counted (db.exec would collide);
+  // the import scan below turns an unaudited async API into a failure, not silence.
+  const offenders = [];
+  for (const dir of ['src', 'bin']) {
+    for (const f of readdirSync(dir).filter(f => f.endsWith('.js'))) {
+      const body = readFileSync(join(dir, f), 'utf8');
+      const launches = (body.match(/\b(?:spawn|spawnSync|execSync|execFileSync)\s*\(/g) ?? []).length;
+      const hidden = (body.match(/windowsHide:\s*true/g) ?? []).length;
+      if (hidden < launches) offenders.push(`${dir}/${f}: ${launches} launch site(s), ${hidden} windowsHide`);
+      const imported = body.match(/import\s*\{([^}]*)\}\s*from\s*['"]node:child_process['"]/)?.[1] ?? '';
+      for (const api of imported.split(',').map(s => s.trim()).filter(Boolean)) {
+        if (!['spawn', 'spawnSync', 'execSync', 'execFileSync'].includes(api))
+          offenders.push(`${dir}/${f}: unaudited child_process API ${api}`);
+      }
+    }
+  }
+  assert.deepEqual(offenders, [], `launch sites missing windowsHide: ${offenders.join(' | ')}`);
+});
+
 test('the runner still starts when PATH offers no usable node', async () => {
   const repo = mkdtempSync(join(tmpdir(), 'repo-nopath-'));
   git(repo, ['init', '-q', '-b', 'main'], commit('init', '--allow-empty'));
@@ -314,6 +339,78 @@ test('.autodev.json branchPrefix names the run branch', () => {
   assert.match(out, /feature\/\d{3}-prefix-demo-run/);
 });
 
+test('worktreeCopy lands named untracked files in the fresh worktree; escapes, absentees, and tracked entries are skipped, and copies are excluded from git add', () => {
+  // repo nested one level down so the '../escape' fixture file stays inside OUR scratch
+  // dir instead of littering the shared system temp root on every suite run.
+  const parent = mkdtempSync(join(tmpdir(), 'wtcopy-'));
+  const repo = join(parent, 'repo');
+  mkdirSync(repo);
+  git(repo, ['init', '-q', '-b', 'main'], commit('init', '--allow-empty'));
+  writeFileSync(join(repo, '.gitignore'), 'local.properties\nsecrets/\n');
+  writeFileSync(join(repo, '.autodev.json'), JSON.stringify({
+    // './committed.txt' on purpose: ls-files prints the NORMALIZED path, so the raw
+    // spelling only skips if the lookup key is normalized too.
+    worktreeCopy: ['local.properties', 'secrets/dev.env', '../escape', 'not-there.txt', '.', '', './committed.txt']
+  }));
+  writeFileSync(join(repo, 'local.properties'), 'sdk.dir=C:/Android');
+  mkdirSync(join(repo, 'secrets'), { recursive: true });
+  writeFileSync(join(repo, 'secrets', 'dev.env'), 'X=1');
+  writeFileSync(join(repo, 'committed.txt'), 'tracked content');
+  // a real file at the '../escape' entry's SOURCE path: without the escape guard, cpSync
+  // would succeed and actually copy it, so the "did not land" assertion below is load-bearing
+  // rather than trivially true because nothing existed to copy.
+  writeFileSync(join(repo, '..', 'escape'), 'should never be reachable via worktreeCopy');
+  git(repo, ['add', '.gitignore', '.autodev.json', 'committed.txt'], commit('cfg'));
+  const out = execFileSync('node', ['bin/autodev.js', 'run', 'copy probe run', '--repo', repo, '--no-spawn'], { encoding: 'utf8' });
+  const db = openDb(); const run = listRuns(db)[0]; db.close();
+  assert.match(out, /run #\d+/); // kickoff still succeeds despite the skipped entries
+  assert.equal(readFileSync(join(run.worktree, 'local.properties'), 'utf8'), 'sdk.dir=C:/Android');
+  assert.equal(readFileSync(join(run.worktree, 'secrets', 'dev.env'), 'utf8'), 'X=1');
+  assert.match(out, /\.\.\/escape escapes the repo, skipped/);
+  assert.match(out, /not-there\.txt not present, skipped/);
+  assert.match(out, /worktreeCopy: \. escapes the repo, skipped/);
+  assert.match(out, /worktreeCopy: {2}escapes the repo, skipped/); // the '' entry
+  assert.match(out, /\.\/committed\.txt is tracked, the worktree already has it, skipped/);
+  assert.ok(!existsSync(join(run.worktree, '..', 'escape')));
+  // the exclude write works: `git add -A` in the worktree must not pick up the copies
+  const dryRun = execFileSync('git', ['add', '-A', '--dry-run'], { cwd: run.worktree, encoding: 'utf8' });
+  assert.doesNotMatch(dryRun, /local\.properties/);
+  assert.doesNotMatch(dryRun, /secrets[\\/]dev\.env/);
+});
+
+test('a worktreeCopy entry that fails mid-copy is skipped with a reason; the run row still gets branch and worktree', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'repo-'));
+  git(repo, ['init', '-q', '-b', 'main']);
+  // 'secrets' is committed as a plain FILE, so the fresh worktree checks it out as a file.
+  writeFileSync(join(repo, 'secrets'), 'placeholder');
+  git(repo, ['add', 'secrets'], commit('secrets as a file'));
+  // Locally (uncommitted) replace it with a directory holding an untracked config file.
+  // 'secrets/dev.env' as a PATH is not itself a tracked index entry (only 'secrets' the blob
+  // is), so it reaches the copy attempt; but the fresh worktree still has 'secrets' checked
+  // out as a FILE from HEAD, so mkdirSync-ing a directory at that path throws mid-copy. This
+  // is the case FIX 1 has to survive without losing the run row.
+  rmSync(join(repo, 'secrets'));
+  mkdirSync(join(repo, 'secrets'), { recursive: true });
+  writeFileSync(join(repo, 'secrets', 'dev.env'), 'X=1');
+  writeFileSync(join(repo, '.autodev.json'), JSON.stringify({ worktreeCopy: ['secrets/dev.env'] }));
+  git(repo, ['add', '.autodev.json'], commit('cfg'));
+  const out = execFileSync('node', ['bin/autodev.js', 'run', 'copy fail probe', '--repo', repo, '--no-spawn'], { encoding: 'utf8' });
+  assert.match(out, /run #\d+/);
+  assert.match(out, /worktreeCopy: secrets\/dev\.env could not be copied \(.+\), skipped/);
+  assert.doesNotMatch(out, /secrets\/dev\.env -> worktree/);
+  const db = openDb(); const run = listRuns(db)[0]; db.close();
+  assert.ok(run.branch && run.worktree, 'a failed copy must not leave branch/worktree unset on the row');
+  assert.equal(run.status, 'RUNNING');
+});
+
+test('a repo without worktreeCopy kicks off exactly as before (no copy lines, no crash)', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'repo-'));
+  git(repo, ['init', '-q', '-b', 'main'], commit('init', '--allow-empty'));
+  const out = execFileSync('node', ['bin/autodev.js', 'run', 'no worktree copy config here', '--repo', repo, '--no-spawn'], { encoding: 'utf8' });
+  assert.doesNotMatch(out, /worktreeCopy:/);
+  assert.match(out, /run #\d+/);
+});
+
 test('autodev init scaffolds the guidance layer and never clobbers an edited one', () => {
   const repo = mkdtempSync(join(tmpdir(), 'repo-'));
   git(repo, ['init', '-q', '-b', 'main'], commit('init', '--allow-empty'));
@@ -334,4 +431,42 @@ test('autodev init scaffolds the guidance layer and never clobbers an edited one
 test('usage names the new commands', () => {
   const out = execFileSync('node', ['bin/autodev.js'], { encoding: 'utf8' });
   for (const c of ['init', 'daemon', '--issue', '--auto-accept']) assert.match(out, new RegExp(c.replace(/[-]/g, '\\-')));
+});
+
+test('run kickoff warns what will leave the machine by default, and --no-push suppresses it', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'repo-'));
+  git(repo, ['init', '-q', '-b', 'main'], commit('init', '--allow-empty'));
+  const out = execFileSync('node', ['bin/autodev.js', 'run', 'kickoff warn probe', '--repo', repo, '--no-spawn'], { encoding: 'utf8' });
+  assert.match(out, /will push a branch and open a draft PR/);
+
+  const repo2 = mkdtempSync(join(tmpdir(), 'repo-'));
+  git(repo2, ['init', '-q', '-b', 'main'], commit('init', '--allow-empty'));
+  const out2 = execFileSync('node', ['bin/autodev.js', 'run', 'kickoff warn probe two', '--repo', repo2, '--no-spawn', '--no-push'], { encoding: 'utf8' });
+  assert.doesNotMatch(out2, /will push a branch/);
+});
+
+test('run kickoff names MERGE and deploy when .autodev.json configures deploy', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'repo-'));
+  git(repo, ['init', '-q', '-b', 'main'], commit('init', '--allow-empty'));
+  writeFileSync(join(repo, '.autodev.json'), JSON.stringify({ deploy: { merge: true } }));
+  git(repo, ['add', '-A'], commit('deploy cfg'));
+  const out = execFileSync('node', ['bin/autodev.js', 'run', 'deploy kickoff probe', '--repo', repo, '--no-spawn'], { encoding: 'utf8' });
+  assert.match(out, /MERGE that PR and deploy/);
+});
+
+test('run kickoff prints no warn when .autodev.json caps the run at push:false', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'repo-'));
+  git(repo, ['init', '-q', '-b', 'main'], commit('init', '--allow-empty'));
+  writeFileSync(join(repo, '.autodev.json'), JSON.stringify({ push: false }));
+  git(repo, ['add', '-A'], commit('push false cfg'));
+  const out = execFileSync('node', ['bin/autodev.js', 'run', 'no push kickoff probe', '--repo', repo, '--no-spawn'], { encoding: 'utf8' });
+  assert.doesNotMatch(out, /will push a branch/);
+});
+
+test('an uncommitted push:false does not silence the kickoff warn: the cap comes from HEAD, not the working tree', () => {
+  const repo = mkdtempSync(join(tmpdir(), 'repo-'));
+  git(repo, ['init', '-q', '-b', 'main'], commit('init', '--allow-empty'));
+  writeFileSync(join(repo, '.autodev.json'), JSON.stringify({ push: false })); // uncommitted
+  const out = execFileSync('node', ['bin/autodev.js', 'run', 'uncommitted push false probe', '--repo', repo, '--no-spawn'], { encoding: 'utf8' });
+  assert.match(out, /will push a branch and open a draft PR/);
 });

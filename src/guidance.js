@@ -61,7 +61,7 @@ export const holdoutClause = () =>
 export function excludeHoldout(worktree) {
   try {
     const p = execFileSync('git', ['rev-parse', '--git-path', 'info/exclude'],
-      { cwd: worktree, encoding: 'utf8' }).trim();
+      { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim();
     const abs = isAbsolute(p) ? p : join(worktree, p);
     const line = `${HOLDOUT_DIR}/\n`;
     const cur = existsSync(abs) ? readFileSync(abs, 'utf8') : '';

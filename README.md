@@ -54,7 +54,7 @@ Requirements: Node ≥22.5, `git`, the [Claude Code CLI](https://claude.com/clau
 ```bash
 npm install -g github:rohitguta2432/claude-autodev#v0.2.0   # pin the tag — master moves
 autodev selftest        # ~30s: drives a fixture repo through all 7 stages, no quota spent
-autodev doctor          # preflight: node/git/claude/gh/repo/test-cmd, each with a fix
+autodev doctor          # preflight: node/git/claude/gh/repo/test-cmd/config/account, each with a fix
 autodev install-skill   # optional: packaged skills into ~/.claude/skills/ (--project for repo-local)
 ```
 
@@ -210,6 +210,8 @@ failure leaves the ticket open for the next tick.
 | `the claude CLI is installed but not signed in` (parks at stage 1, after **one** session) | `claude --version` passes while logged out, so `doctor` can't catch this; run `claude` once interactively, then `autodev resume <id>` |
 | `the claude CLI could not be launched` | `claude` isn't on `PATH`; install it or point `AUTODEV_CLAUDE_BIN` at it |
 | `the Claude usage allowance for this account is exhausted` | wait for the reset (or raise the limit), then `autodev resume <id>` |
+| `... exist here but are untracked: a run's fresh worktree will not have them` (`autodev doctor` WARN), or the build fails in the run's worktree with a missing SDK path / `.env` / keystore | name the files it needs in `worktreeCopy` in `.autodev.json`; entries that are already tracked are skipped, since the worktree already has the committed copy |
+| `.autodev.json` seems ignored (`maxCostUsd` not enforced, `push: false` not honored) | runs read the committed copy in the run worktree; an untracked or uncommitted config never arrives there. Commit it; `autodev doctor` warns about this |
 
 A parked run's reason names what failed and how to fix it. When one line isn't
 enough, `~/.autodev/runs/<id>/runner.log` holds the failing session's own
@@ -235,6 +237,17 @@ Per-repo `.autodev.json` (committed to the *target* repo):
 | `push` | `false` | never push/PR — caps runs at Verify |
 | `branchPrefix` | `"feature"` | branch naming: `<prefix>/NNN-slug` |
 | `deploy` | `{"merge":true,"cmd":"./deploy.sh","proofCmd":"./proof.sh"}` | enables stage 8 — see [Deploy](#deploy) and [Proof](#proof). Absent = 7-stage pipeline |
+| `worktreeCopy` | `["local.properties", ".env", "debug.keystore"]` | exact files/dirs (typically gitignored) copied from the main repo into each run's fresh worktree at kickoff; entries already tracked in the repo are skipped; see the note below |
+
+A run's worktree contains tracked files only. Builds that need config that is not committed
+(an Android `local.properties` SDK path, `.env`, keystores, `gradle.properties`) name each file
+in `worktreeCopy`; kickoff copies exactly those, skips anything already tracked (the worktree
+already has the committed copy), and `autodev doctor` warns when it spots common ones untracked
+and unlisted. Naming an untracked `.autodev.json` itself makes an uncommitted config effective
+inside the run's worktree (a tracked `.autodev.json` is skipped the same way). Copied files are
+added to the repo's shared `.git/info/exclude` (which also hides them from `git status` in your
+main checkout), so autodev's own sessions cannot commit or push them: they leave the machine
+only if the build itself sends them.
 
 Env vars:
 
@@ -260,7 +273,7 @@ subscription login draws on your subscription limits, while an
 
 - `autodev cost <id>` — per-stage sessions/tokens/cost summed from the run's
   metrics events (also visible per stage on the dashboard).
-- Every session runs `claude-opus-5` at `--effort max` unless told otherwise. Pin cheaper
+- Every session runs `claude-fable-5` at `--effort max` unless told otherwise. Pin cheaper
   models or lower effort: `AUTODEV_CLAUDE_MODEL` / `AUTODEV_CLAUDE_EFFORT` for everything,
   or per stage in `.autodev.json` — `{"stageModels": {"push": "claude-sonnet-5"},
   "stageEffort": {"push": "low"}}` (per-stage > repo-wide > env > default).
@@ -321,3 +334,11 @@ too. Installed skills just tend to produce better results.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+---
+
+### 🤝 Work with me
+
+I'm an **AI Consultant · Forward Deployed Engineer** — I embed with teams and ship AI to production: agents, MCP integrations, and LLM features, with evals proving they work.
+
+**→ [rohitraj.tech/en/hire](https://rohitraj.tech/en/hire)**

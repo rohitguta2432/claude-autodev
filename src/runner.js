@@ -4,7 +4,7 @@ import { join, dirname, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDb, getRun, updateRun, runDir, PORT, skippedSet } from './db.js';
 import { emit } from './events.js';
-import { STAGES, scheduledStages, stageN, detectTestCmd, findSpecDir, specDirs,
+import { STAGES, scheduledStages, untilStage, detectTestCmd, findSpecDir, specDirs,
          holdoutPrompt, holdoutFixPrompt } from './stages.js';
 import { repoConfig, modelFor, effortFor } from './config.js';
 import { parseClaudeResult } from './metrics.js';
@@ -37,6 +37,12 @@ writeFileSync(hooksFile, JSON.stringify({ hooks: { PostToolUse: [{ matcher: 'Edi
   hooks: [{ type: 'command', command: `node ${join(ROOT, 'bin/hook-emit.js')}` }] }] } }));
 
 const cfg = repoConfig(run.worktree);
+// What THIS run actually loaded. The worktree checkout is tracked files only, so an
+// uncommitted .autodev.json in the main repo is absent here and its keys read as
+// defaults; this line is how an operator notices (doctor warns preflight too).
+await ev({ type: 'activity', stage: run.stage, detail: existsSync(join(run.worktree, '.autodev.json'))
+  ? `config .autodev.json: ${Object.keys(cfg).length ? Object.entries(cfg).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(' ').slice(0, 200) : 'present but empty or unparseable'}`
+  : 'config: no .autodev.json in the worktree, defaults apply' });
 // Running cost for THIS run — seeded from prior metrics events so resume keeps counting.
 let costUsd = 0;
 try {
@@ -93,7 +99,7 @@ function runClaude(prompt, stageN) {
     // attaches it to the thrown error below. Piping would trade the first away for nothing.
     raw = execFileSync(file, argv, {
       cwd: run.worktree, encoding: 'utf8', timeout: CFG.stageTimeoutMin * 60_000,
-      maxBuffer: MAX_BUFFER,
+      maxBuffer: MAX_BUFFER, windowsHide: true,
       env: { ...process.env, AUTODEV_RUN: String(runId), AUTODEV_RUN_DIR: ctx.runDir,
         AUTODEV_PORT: String(ctx.port), AUTODEV_STAGE: String(stageN) },
     });
@@ -190,7 +196,7 @@ async function holdoutStage(stage) {
 function prState(pr) {
   try {
     return JSON.parse(execFileSync('gh', ['pr', 'view', pr, '--json', 'state,mergeCommit'],
-      { cwd: run.worktree, encoding: 'utf8', timeout: 30_000 }));
+      { cwd: run.worktree, encoding: 'utf8', timeout: 30_000, windowsHide: true }));
   } catch { return null; }
 }
 
@@ -218,13 +224,13 @@ async function deployStage(stage) {
       // branch is removed separately below, best-effort; the local one goes with the worktree.
       try {
         execFileSync('gh', ['pr', 'merge', pr, `--${strategy}`],
-          { cwd: run.worktree, encoding: 'utf8', timeout: 120_000 });
+          { cwd: run.worktree, encoding: 'utf8', timeout: 120_000, windowsHide: true });
       } catch (e) {
         throw Object.assign(new Error(`gh pr merge failed: ${causeLine(`${e.stdout ?? ''}\n${e.stderr ?? ''}`, 200) || e.message}`), { final: true });
       }
       const after = prState(pr);
       await ev({ type: 'merged', stage: stage.n, detail: `${after?.mergeCommit?.oid?.slice(0, 12) ?? 'commit unknown'} via gh pr merge --${strategy}` });
-      try { execFileSync('git', ['push', 'origin', '--delete', run.branch], { cwd: run.worktree, stdio: 'pipe', timeout: 60_000 }); }
+      try { execFileSync('git', ['push', 'origin', '--delete', run.branch], { cwd: run.worktree, stdio: 'pipe', timeout: 60_000, windowsHide: true }); }
       catch { await ev({ type: 'activity', stage: stage.n, detail: `remote branch ${run.branch} not deleted — remove it by hand` }); }
     }
   }
@@ -235,7 +241,7 @@ async function deployStage(stage) {
     // or run-derived is interpolated into it.
     const t0 = Date.now();
     try {
-      const out = execSync(d.cmd, { cwd: run.repo_path, encoding: 'utf8', timeout: CFG.stageTimeoutMin * 60_000 });
+      const out = execSync(d.cmd, { cwd: run.repo_path, encoding: 'utf8', timeout: CFG.stageTimeoutMin * 60_000, windowsHide: true });
       writeFileSync(join(ctx.runDir, 'deploy-output.txt'), out);
     } catch (e) {
       const out = `${e.stdout ?? ''}\n${e.stderr ?? ''}`;
@@ -257,7 +263,7 @@ async function deployStage(stage) {
     const had = new Set(proofFiles(ctx.runDir).map(f => f.name));
     await ev({ type: 'activity', stage: stage.n, detail: `proof: ${d.proofCmd}` });
     try {
-      const out = execSync(d.proofCmd, { cwd: run.repo_path, encoding: 'utf8', timeout: CFG.stageTimeoutMin * 60_000,
+      const out = execSync(d.proofCmd, { cwd: run.repo_path, encoding: 'utf8', timeout: CFG.stageTimeoutMin * 60_000, windowsHide: true,
         env: { ...process.env, AUTODEV_PROOF_DIR: dir, AUTODEV_RUN: String(runId) } });
       writeFileSync(join(ctx.runDir, 'proof-output.txt'), out);
     } catch (e) {
@@ -300,7 +306,7 @@ async function testStage(stage) {
   mkdirSync(join(run.worktree, '.autodev'), { recursive: true });
   for (let attempt = 0; ; attempt++) {
     try {
-      const out = execSync(cmd, { cwd: run.worktree, encoding: 'utf8', timeout: CFG.stageTimeoutMin * 60_000 });
+      const out = execSync(cmd, { cwd: run.worktree, encoding: 'utf8', timeout: CFG.stageTimeoutMin * 60_000, windowsHide: true });
       writeFileSync(join(run.worktree, '.autodev/test-output.txt'), out); run._testsPassed = true;
       break;
     } catch (e) {
@@ -337,9 +343,9 @@ const specsBefore = new Set(specDirs(run.worktree));
 // builder reads out of the history what the sequester takes off the disk.
 excludeHoldout(run.worktree);
 const PIPELINE = scheduledStages(cfg);
-// Hard stop after stage N — change-controlled repos can forbid autonomous push/PR
-// outright. Precedence: --until (run row) > .autodev.json "until" > "push": false.
-const until = run.until_stage || stageN(cfg.until) || (cfg.push === false ? stageN('verify') : null) || PIPELINE.at(-1).n;
+// Hard stop after stage N: change-controlled repos can forbid autonomous push/PR
+// outright; precedence lives in untilStage, shared with run kickoff so the two never disagree.
+const until = untilStage(cfg, run.until_stage);
 for (const stage of PIPELINE.filter(s => s.n >= run.stage && s.n <= until && !skipped.has(s.n))) {
   if (Date.now() - started > CFG.budgetHours * 3_600_000) await park(stage, new Error('wall-clock budget exceeded'));
   saveState({ stage: stage.n });
@@ -415,7 +421,7 @@ for (const stage of PIPELINE.filter(s => s.n >= run.stage && s.n <= until && !sk
     const pr = getRun(db, runId).pr_url;
     if (pr) {
       try {
-        execFileSync('gh', ['pr', 'ready', pr], { cwd: run.worktree, encoding: 'utf8', timeout: 30_000 });
+        execFileSync('gh', ['pr', 'ready', pr], { cwd: run.worktree, encoding: 'utf8', timeout: 30_000, windowsHide: true });
         await ev({ type: 'activity', stage: stage.n, detail: 'draft PR marked ready for review' });
       } catch {
         await ev({ type: 'activity', stage: stage.n, detail: 'could not mark PR ready (gh missing or not a draft) — check it manually' });

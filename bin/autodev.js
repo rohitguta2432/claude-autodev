@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, openSync, copyFileSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdirSync, openSync, copyFileSync, readFileSync, writeFileSync, existsSync, rmSync, cpSync, appendFileSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
-import { join, dirname, basename, resolve, relative } from 'node:path';
+import { join, dirname, basename, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { PORT, runDir, openDb, createRun, getRun, listRuns, updateRun, deleteRun, AUTODEV_HOME } from '../src/db.js';
 import { emit } from '../src/events.js';
-import { specDirFor, isCompleteSpecDir, STAGES, scheduledStages, stageN } from '../src/stages.js';
+import { specDirFor, isCompleteSpecDir, STAGES, scheduledStages, stageN, untilStage } from '../src/stages.js';
 import { parseJiraRef, fetchIssue, leadingJiraKey } from '../src/jira.js';
 import { doctor, printChecks } from '../src/doctor.js';
 import { repoConfig } from '../src/config.js';
@@ -27,7 +27,10 @@ async function ensureServer() {
     // process.execPath, never a bare 'node': autodev needs >=22.5 for node:sqlite, and the
     // interpreter already running us is the only one known to satisfy that. A PATH 'node' that
     // is missing or too old dies into the log and leaves the run RUNNING forever.
-    spawn(process.execPath, [join(ROOT, 'src/server.js')], { detached: true, stdio: ['ignore', log, log] }).unref();
+    // windowsHide on every launch (see the structural test in cli.test.js): on a detached
+    // child it is a no-op (DETACHED_PROCESS owns no console), but console children launched
+    // FROM these console-less processes each get a fresh visible console window without it.
+    spawn(process.execPath, [join(ROOT, 'src/server.js')], { detached: true, stdio: ['ignore', log, log], windowsHide: true }).unref();
   }
 }
 
@@ -62,7 +65,7 @@ repos and requirements you'd trust an unsupervised agent with.`;
 function spawnRunner(id, extra = []) {
   const log = openSync(join(runDir(id), 'runner.log'), 'a');
   spawn(process.execPath, [join(ROOT, 'src/runner.js'), String(id), ...extra],
-    { detached: true, stdio: ['ignore', log, log], env: process.env }).unref();
+    { detached: true, stdio: ['ignore', log, log], env: process.env, windowsHide: true }).unref();
 }
 
 // ponytail: the brief's one-liner (`rest.filter(...)`) mis-parses `--repo <path>` —
@@ -127,6 +130,24 @@ if (cmd === 'run') {
   const failures = printChecks((await doctor(repoPath)).filter(c => c.severity !== 'pass'));
   if (failures.length) { console.error(`\n${failures.length} preflight check(s) failed — fix and re-run (autodev doctor to re-check)`); process.exit(1); }
 
+  // Autonomy with visibility: the default pipeline leaves the machine (push + draft PR,
+  // then merge + deploy when configured). Say so at kickoff, before it happens.
+  const cfg = repoConfig(repoPath); // kept for branchPrefix reuse below
+  // The cap must come from the config the RUN will read: its worktree checkout holds the
+  // committed .autodev.json, not this folder's working copy (an uncommitted "push": false
+  // must not silence the warn for a run that will push). --branch adopts another branch's
+  // checkout, so the cap reads that branch's config, not HEAD's.
+  let headCfg = {};
+  try { headCfg = JSON.parse(execFileSync('git', ['show', `${branchArg || 'HEAD'}:.autodev.json`],
+    { cwd: repoPath, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000, windowsHide: true })); } catch {}
+  const cap = untilStage(headCfg, until);
+  if (cap >= stageN('push')) {
+    const acts = ['push a branch and open a draft PR on origin'];
+    if (headCfg.deploy && cap >= stageN('deploy'))
+      acts.push(headCfg.deploy.merge !== false ? 'MERGE that PR and deploy' : 'run the deploy command');
+    console.log(`[ WARN ] autonomous endpoint: this run will ${acts.join(', then ')} (cap it with --until verify, --no-push, or "push": false in .autodev.json)`);
+  }
+
   // Jira mode: "autodev run CV-123" (or a browse URL) — resolve the ticket into the
   // requirement before anything else, so spec matching and slug use the real summary.
   // --issue-ref (jira-queue kickoffs) carries the requirement inline: record the key
@@ -181,7 +202,7 @@ if (cmd === 'run') {
     spec_dir: adoptedSpec, skipped: skip.length ? skip.join(',') : null,
     stage: (() => { let s = adoptedSpec ? 2 : 1; while (skip.includes(s)) s++; return s; })() });
   const nnn = String(id).padStart(3, '0');
-  const branch = branchArg || `${repoConfig(repoPath).branchPrefix || 'autodev'}/${nnn}-${slug}`;
+  const branch = branchArg || `${cfg.branchPrefix || 'autodev'}/${nnn}-${slug}`;
   const wtRoot = process.env.AUTODEV_WORKTREES || join(homedir(), 'worktrees');
   const worktree = join(wtRoot, repo, `run-${nnn}`);
   mkdirSync(dirname(worktree), { recursive: true });
@@ -190,11 +211,78 @@ if (cmd === 'run') {
   const wtAddArgs = branchArg
     ? ['worktree', 'add', worktree, branch]
     : ['worktree', 'add', '-b', branch, worktree];
-  try { execFileSync('git', wtAddArgs, { cwd: repoPath }); }
+  try { execFileSync('git', wtAddArgs, { cwd: repoPath, windowsHide: true }); }
   catch (e) { // a failed kickoff must leave no ghost row behind — same as before the reserve
     deleteRun(db, id); db.close();
     console.error(`git worktree add failed: ${e.message}`);
     process.exit(1);
+  }
+  // A fresh worktree is TRACKED files only, and the build config a repo needs (SDK paths,
+  // .env, keystores; typically gitignored) is exactly what never arrives. worktreeCopy is the
+  // explicit allowlist: entries move because the operator named them, never because a
+  // heuristic found them. Missing entries are noted, not fatal; entries escaping the repo are
+  // refused; entries already tracked are skipped (the worktree already has the committed
+  // copy, and overwriting it would put an uncommitted local change into a branch the run
+  // commits and pushes); a copy that fails degrades to today's behavior rather than aborting
+  // the whole kickoff.
+  // .autodev.json only - no CLI flag, no env var; default [].
+  const copyList = repoConfig(repoPath).worktreeCopy;
+  const copyArr = Array.isArray(copyList) ? copyList : [];
+  // Escape-check before the batched git call: an out-of-repo or empty pathspec makes
+  // `git ls-files` fail outright ("fatal: ... is outside repository"), which would blank
+  // the tracked set for every entry in the batch, not just the offending one.
+  const inRepo = copyArr.filter(rel => {
+    if (isAbsolute(rel)) return false;
+    const relN = relative(repoPath, join(repoPath, rel));
+    return relN && !relN.startsWith('..');
+  // :(literal) so a leading ':' or a '*' in an entry cannot act as pathspec magic and
+  // fail (or over-match) the whole batch; normalized so the key matches ls-files output.
+  }).map(rel => `:(literal)${relative(repoPath, join(repoPath, rel)).replaceAll('\\', '/')}`);
+  let tracked = new Set();
+  if (inRepo.length) {
+    try {
+      tracked = new Set(execFileSync('git', ['ls-files', '--', ...inRepo],
+        { cwd: repoPath, encoding: 'utf8', windowsHide: true }).split('\n').filter(Boolean));
+    } catch { /* ls-files failing just means nothing is treated as tracked */ }
+  }
+  for (const rel of copyArr) {
+    const src = join(repoPath, rel);
+    const relN = relative(repoPath, src);
+    if (isAbsolute(rel) || !relN || relN.startsWith('..')) {
+      console.log(`worktreeCopy: ${rel} escapes the repo, skipped`); continue;
+    }
+    // Normalized ('./x' -> 'x', 'sub/' -> 'sub'), matching what ls-files prints: a raw
+    // './x' key would miss the tracked set and reopen the overwrite the skip prevents.
+    const relPosix = relN.replaceAll('\\', '/');
+    if (!existsSync(src)) { console.log(`worktreeCopy: ${rel} not present, skipped`); continue; }
+    if (tracked.has(relPosix) || [...tracked].some(t => t.startsWith(`${relPosix}/`))) {
+      console.log(`worktreeCopy: ${rel} is tracked, the worktree already has it, skipped`); continue;
+    }
+    try {
+      mkdirSync(dirname(join(worktree, rel)), { recursive: true });
+      // dereference: true copies file content, never a live symlink pointer, which could
+      // point outside the repo; it also sidesteps Windows symlink creation needing
+      // privileges a build-config copy should never require.
+      cpSync(src, join(worktree, rel), { recursive: true, dereference: true });
+      // Sessions run `git add -A`, so an unexcluded copy would ride the stage-5 push.
+      // The exclude file is the repo-wide .git/info/exclude (git shares info/ across
+      // worktrees; there is no per-worktree exclude) - same mechanism as the holdout
+      // sequester. Append-once: runs repeat, the exclude list must not grow with them.
+      // Own catch: a copy that LANDED must never be reported as skipped.
+      try {
+        const exclude = resolve(worktree, execFileSync('git', ['rev-parse', '--git-path', 'info/exclude'],
+          { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim());
+        mkdirSync(dirname(exclude), { recursive: true }); // git init --template= can omit .git/info
+        const line = `/${relPosix}`;
+        if (!existsSync(exclude) || !readFileSync(exclude, 'utf8').split('\n').includes(line))
+          appendFileSync(exclude, `${line}\n`);
+      } catch (e) {
+        console.log(`worktreeCopy: ${rel} copied but could NOT be git-excluded (${e.code ?? e.message}); git add will see it`);
+      }
+      console.log(`worktreeCopy: ${rel} -> worktree`);
+    } catch (e) {
+      console.log(`worktreeCopy: ${rel} could not be copied (${e.code ?? e.message}), skipped`);
+    }
   }
   updateRun(db, id, { branch, worktree });
   db.close();
@@ -253,7 +341,7 @@ nobody is watching.
 } else if (cmd === 'daemon') {
   const arg = (flag, dflt) => { const i = rest.indexOf(flag); return i === -1 ? dflt : rest[i + 1]; };
   const repoPath = resolve(arg('--repo', process.cwd()));
-  try { execFileSync('git', ['rev-parse', '--git-dir'], { cwd: repoPath, stdio: 'ignore' }); }
+  try { execFileSync('git', ['rev-parse', '--git-dir'], { cwd: repoPath, stdio: 'ignore', windowsHide: true }); }
   catch { console.error(`not a git repository: ${repoPath}`); process.exit(1); }
   await ensureConsent(); // the daemon starts runs unattended — consent cannot be deferred to one
   await ensureServer();
@@ -292,7 +380,7 @@ nobody is watching.
   if (run.pid) {
     if (process.platform === 'win32') {
       // negative-PID group kill is POSIX-only; taskkill /T fells the whole process tree
-      try { execFileSync('taskkill', ['/pid', String(run.pid), '/T', '/F'], { stdio: 'ignore' }); } catch {}
+      try { execFileSync('taskkill', ['/pid', String(run.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }); } catch {}
     } else {
       try { process.kill(-run.pid, 'SIGTERM'); }
       catch { try { process.kill(run.pid); } catch {} }
