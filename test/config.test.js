@@ -26,3 +26,14 @@ test('effortFor: per-stage > repo effort > env pin > max', () => {
   assert.equal(effortFor({}, 'spec'), 'max');
   assert.equal(DEFAULT_EFFORT, 'max');
 });
+
+test('runner.js imports every stages.js name it calls at module load', async () => {
+  // A standing .autodev.json "skip" list crashed the runner at startup with
+  // "ReferenceError: stageN is not defined" — before any stage, so no event, no park:
+  // the run sat RUNNING until an operator stopped it by hand (run #9, 2026-09-10).
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../src/runner.js', import.meta.url), 'utf8');
+  const imported = /from '\.\/stages\.js';/.exec(src) && src.slice(0, src.indexOf("from './stages.js';"));
+  assert.match(src, /\bstageN\(/, 'the skip list still resolves names through stageN');
+  assert.match(imported, /\bstageN\b/, 'stageN is used but not imported from stages.js');
+});

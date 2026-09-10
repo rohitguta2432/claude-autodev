@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { openDb, getRun, updateRun, runDir, PORT, skippedSet } from './db.js';
 import { emit } from './events.js';
 import { STAGES, scheduledStages, untilStage, detectTestCmd, findSpecDir, specDirs,
-         holdoutPrompt, holdoutFixPrompt } from './stages.js';
+         holdoutPrompt, holdoutFixPrompt, stageN } from './stages.js';
 import { repoConfig, modelFor, effortFor } from './config.js';
 import { parseClaudeResult } from './metrics.js';
 import { causeLine, classify, sessionBlock } from './session.js';
