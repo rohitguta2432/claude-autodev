@@ -197,11 +197,12 @@ export const STAGES = [
         const tasks = readFileSync(specFile(run, 'tasks.md'), 'utf8');
         const un = tasks.match(/^- \[ \] \**(T\d+)/m);
         need(!un, `unchecked task remains: ${un?.[1]}`);
-      } else {
-        // Spec-less: the commit is the evidence — a session that changed nothing did nothing.
-        need(git(run.worktree, 'show --stat --format= HEAD').trim() !== '', 'no commit made for the requirement');
       }
+      // Tree first: "you forgot to commit" is the actionable message when both are true.
       need(git(run.worktree, 'status --porcelain').trim() === '', 'uncommitted changes in worktree');
+      // Spec-less: the commit is the evidence — a session that changed nothing did nothing.
+      if (!hasSpecSet(run))
+        need(git(run.worktree, 'show --stat --format= HEAD').trim() !== '', 'no commit made for the requirement');
     },
   },
   {
