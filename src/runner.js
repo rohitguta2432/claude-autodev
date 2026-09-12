@@ -224,6 +224,15 @@ async function pushDirect(stage) {
   gitq(['push', '-q', '-u', '--force-with-lease', 'origin', run.branch]);
   await ev({ type: 'pushed', stage: stage.n, detail: `${gitq(['rev-parse', '--short=12', 'HEAD'])} on ${run.branch}, rebased onto origin/${base}` });
 }
+// Did an EARLIER attempt of this run already land? Only a resume has a 'merged' event on
+// file — the current attempt writes its own after the check below.
+const priorMerge = () => {
+  try {
+    return readFileSync(join(ctx.runDir, 'events.jsonl'), 'utf8').split('\n')
+      .some(l => { try { return JSON.parse(l).type === 'merged'; } catch { return false; } });
+  } catch { return false; }
+};
+
 // Stage 8's "merge" in direct mode: fast-forward the base branch to this branch. Idempotent
 // on resume — a run parked after landing (deploy or proof failed) finds its HEAD already on
 // the base and records that instead of pushing again.
@@ -234,6 +243,16 @@ async function landDirect(stage) {
   let landed = false;
   try { gitq(['merge-base', '--is-ancestor', head, `origin/${base}`]); landed = true; } catch { /* not yet */ }
   if (landed) {
+    // HEAD sitting on the base means one of two opposite things. A run that landed on an
+    // earlier attempt and parked in deploy or proof finds ITS OWN commits there: idempotent
+    // resume, recorded and allowed. A run whose implement stage wrote nothing finds the base
+    // itself — it produced no commit, so there is nothing to land, and every later stage
+    // would test, deploy and report on code this run never wrote. That is how run #19 closed
+    // SCRUM-85 with an empty branch and a deploy of the commit already on main. A prior
+    // 'merged' event is what separates the two.
+    if (!priorMerge()) throw Object.assign(new Error(
+      `nothing to land: ${run.branch} has no commits over origin/${base} — the implement stage produced no code`),
+      { final: true });
     await ev({ type: 'merged', stage: stage.n, detail: `${head.slice(0, 12)} (already on ${base} before this attempt)` });
     return;
   }

@@ -366,18 +366,25 @@ function makeDirectRepo(cfg = {}) {
   return { wt, origin };
 }
 // A stub that answers `auth status` and otherwise implements spec-less: commit what is there.
-const directStubJs = (calls, { loggedIn = true } = {}) => `
+// implement=false: a session that burns its turn and writes nothing — the shape that let
+// run #19 reach deploy on an empty branch.
+const directStubJs = (calls, { loggedIn = true, implement = true } = {}) => `
 const fs = require('node:fs'); const cp = require('node:child_process');
 if (process.argv[2] === 'auth') { process.stdout.write(JSON.stringify({ loggedIn: ${loggedIn}, email: 'x@y' })); process.exit(0); }
 const p = String(process.argv[3] ?? '');
 fs.appendFileSync(${JSON.stringify(calls)}, p.slice(0, 40) + '\\n');
+${implement ? `
 cp.execFileSync('git', ['add', '-A'], { stdio: 'ignore' });
 cp.execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'impl'], { stdio: 'ignore' });
-`;
-function runDirect({ loggedIn = true, before = () => {}, cfg = {} } = {}) {
+` : `
+// the session wrote nothing and left the tree exactly as it found it — run #19's shape,
+// which the uncommitted-changes guard does not catch
+cp.execFileSync('git', ['clean', '-fdq'], { stdio: 'ignore' });
+`}`;
+function runDirect({ loggedIn = true, implement = true, before = () => {}, cfg = {} } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'stub-direct-'));
   const calls = join(dir, 'calls'); writeFileSync(calls, '');
-  const bin = stubClaude(dir, directStubJs(calls, { loggedIn }));
+  const bin = stubClaude(dir, directStubJs(calls, { loggedIn, implement }));
   const { wt, origin } = makeDirectRepo(cfg);
   const db = openDb();
   const id = createRun(db, { slug: 'd', repo: 'demo', repo_path: wt, worktree: wt, branch: 'autodev/001-x', requirement: 'ship feature.txt' });
@@ -402,6 +409,18 @@ test('pushMode direct: no PR, no push session — the runner rebases, pushes, an
   const log = execFileSync('git', ['log', '--format=%s', 'main'], { cwd: origin, encoding: 'utf8' }).trim().split('\n');
   assert.deepEqual(log.slice(0, 2), ['impl', 'elsewhere']);
   assert.match(events, /"label"|shot\.txt/);
+});
+
+test('pushMode direct: a run whose implement stage wrote nothing parks instead of deploying an empty branch', () => {
+  const { run, origin, events } = runDirect({ implement: false });
+  assert.equal(run.status, 'BLOCKED');
+  assert.match(run.blocked_reason, /nothing to land.*no commits over origin\/main/);
+  // nothing was deployed, and nothing was reported as merged — the ticket stays open
+  assert.doesNotMatch(events, /"type":"deployed"/);
+  assert.doesNotMatch(events, /"type":"merged"/);
+  // main still carries only the other run's commit; this run landed nothing
+  const log = execFileSync('git', ['log', '--format=%s', 'main'], { cwd: origin, encoding: 'utf8' }).trim().split('\n');
+  assert.equal(log[0], 'elsewhere');
 });
 
 test('auth preflight: a signed-out CLI parks before any session is spent, and says how to sign in', () => {
