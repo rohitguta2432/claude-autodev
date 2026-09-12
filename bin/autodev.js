@@ -448,7 +448,8 @@ nobody is watching.
     ? join(process.cwd(), '.claude', 'skills') : join(homedir(), '.claude', 'skills');
   const force = rest.includes('--force');
   // [repo path under skill/, installed skill name]
-  const skills = [['SKILL.md', 'autodev'], [join('autodev-specs', 'SKILL.md'), 'autodev-specs']];
+  const skills = [['SKILL.md', 'autodev'], [join('autodev-specs', 'SKILL.md'), 'autodev-specs'],
+    [join('autodev-pixel-match', 'SKILL.md'), 'autodev-pixel-match']];
   for (const [src, name] of skills) {
     const dest = join(root, name, 'SKILL.md');
     if (cmd === 'uninstall-skill') {

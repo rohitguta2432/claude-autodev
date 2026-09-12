@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
 import { STAGES, scheduledStages, findSpecDir, specDirOf, detectTestCmd, specDirFor, isCompleteSpecDir,
-         markerSubdirs, hasTestSources, untilStage, hasSpecSet } from '../src/stages.js';
+         markerSubdirs, hasTestSources, untilStage, hasSpecSet, designRefs, designCompares } from '../src/stages.js';
 import { git, commit } from './helpers.js';
 
 function gitRepo() {
@@ -290,4 +290,55 @@ test('spec-less run: implement and verify work from the requirement, and the com
   git(wt, ['add', '-A'], commit('spec'));
   assert.equal(hasSpecSet(run), true);
   assert.match(STAGES[2].prompt(run), /tasks\.md/);
+});
+
+/* ---- design references: a picture on the ticket is an acceptance criterion ---- */
+
+function repoWithDesign(files) {
+  const wt = gitRepo();
+  mkdirSync(join(wt, '.autodev/design'), { recursive: true });
+  for (const f of files) writeFileSync(join(wt, '.autodev/design', f), 'x');
+  return wt;
+}
+const stage = (key) => STAGES.find(s => s.key === key);
+
+test('design references are listed, and compare images are not mistaken for them', () => {
+  const wt = repoWithDesign(['card.png', 'flow.JPG', 'compare-card.png', 'notes.txt']);
+  const run = { worktree: wt };
+  assert.deepEqual(designRefs(run), ['card.png', 'flow.JPG']);
+  assert.deepEqual(designCompares(run), ['compare-card.png']);
+  assert.deepEqual(designRefs({ worktree: gitRepo() }), [], 'no design directory is not an error');
+});
+
+test('implement is told about the references by name, and told to prove the match', () => {
+  const run = { worktree: repoWithDesign(['card.png']), requirement: 'SCRUM-9: the card' };
+  const prompt = stage('implement').prompt(run);
+  assert.match(prompt, /\.autodev\/design\/: card\.png/);
+  assert.match(prompt, /compare-<screen>\.png/);
+  assert.match(prompt, /autodev-pixel-match/);
+  // a ticket with no picture is left exactly as it was
+  assert.doesNotMatch(stage('implement').prompt({ worktree: gitRepo(), requirement: 'x' }), /design/i);
+});
+
+test('verify cannot pass a design ticket that was never compared', () => {
+  const wt = repoWithDesign(['card.png']);
+  const run = { worktree: wt, requirement: 'SCRUM-9: the card' };
+  mkdirSync(join(wt, '.autodev'), { recursive: true });
+  writeFileSync(join(wt, '.autodev/verify.json'), JSON.stringify({ verdict: 'PASS', findings: [] }));
+  assert.throws(() => stage('verify').check(run), /never compared to the built UI/);
+
+  writeFileSync(join(wt, '.autodev/design/compare-card.png'), 'x');
+  stage('verify').check(run); // the side-by-side exists — the gate opens
+
+  // a run with no references keeps the old behaviour: nothing to compare, nothing to demand
+  const plain = gitRepo();
+  mkdirSync(join(plain, '.autodev'), { recursive: true });
+  writeFileSync(join(plain, '.autodev/verify.json'), JSON.stringify({ verdict: 'PASS', findings: [] }));
+  stage('verify').check({ worktree: plain });
+});
+
+test('verify names appearance as a criterion only when there are references', () => {
+  assert.match(stage('verify').prompt({ worktree: repoWithDesign(['card.png']), requirement: 'r' }),
+    /\(E\) appearance/);
+  assert.doesNotMatch(stage('verify').prompt({ worktree: gitRepo(), requirement: 'r' }), /\(E\) appearance/);
 });

@@ -141,6 +141,48 @@ const specFile = (run, f) => {
 export const hasSpecSet = (run) => { const d = specDirOf(run); return Boolean(d && existsSync(join(d, 'tasks.md'))); };
 const requirementRef = (run) => `the requirement below (from Jira ${run.jira_key ?? run.issue_ref ?? ''}):\n${run.requirement}`;
 
+// ---- design references (see fetchDesignRefs in jira-queue.js) ----
+// A picture on the ticket is an acceptance criterion, not decoration: "match the attached
+// design" cannot be judged by a session that never opened it, and a pipeline that lets that
+// through ships a screen nobody compared to anything. When the runner has pulled references
+// into the worktree, Implement is told to match them and Verify will not pass without the
+// side-by-side that shows it did.
+export const DESIGN_DIR = '.autodev/design';
+const IMAGE = /\.(png|jpe?g|webp|gif|avif)$/i;
+const listDesign = (run, pick) => {
+  if (!run?.worktree) return [];
+  try {
+    return readdirSync(join(run.worktree, DESIGN_DIR)).filter(f => IMAGE.test(f) && pick(f)).sort();
+  } catch { return []; }
+};
+/** The references themselves — what the built UI has to look like. */
+export const designRefs = (run) => listDesign(run, f => !f.startsWith('compare-'));
+/** The side-by-sides a session produced: reference beside the real screen. */
+export const designCompares = (run) => listDesign(run, f => f.startsWith('compare-'));
+
+// Appended to the Implement prompt, so the session is told about the pictures in the same
+// breath as the work. Naming the files matters: "the attached design" is not a path.
+const designClause = (run) => {
+  const refs = designRefs(run);
+  if (!refs.length) return '';
+  return `\n\nThis ticket carries design references, already downloaded to ${DESIGN_DIR}/: ${refs.join(', ')}. `
+    + `Open them — they are the acceptance criteria for how this must look, and they outrank your own judgement about layout, colour and type. `
+    + `Build the UI to match, then prove it: render the finished screen, screenshot it, and save one image with the reference beside your screenshot as ${DESIGN_DIR}/compare-<screen>.png. `
+    + `Iterate — render, compare, correct — until the two read as the same screen rather than as one inspired by the other; sample colours out of the reference instead of estimating them. `
+    + `Use the autodev-pixel-match skill if it is installed.`;
+};
+
+// Verify's own appearance question. Separate wording from Implement's: this session is not
+// building the screen, it is deciding whether the built one matches the picture.
+const designVerifyClause = (run) => {
+  const refs = designRefs(run);
+  if (!refs.length) return '';
+  return ` (E) appearance — the design references in ${DESIGN_DIR}/ (${refs.join(', ')}) are acceptance criteria:`
+    + ` render the built UI, put it beside each reference, and judge whether they read as the same screen.`
+    + ` Save every side-by-side as ${DESIGN_DIR}/compare-<screen>.png; a reference with no compare image is a CRITICAL finding,`
+    + ` and so is a visible mismatch you chose not to fix.`;
+};
+
 // The stages a run will actually attempt. Deploy is opt-in, so an unconfigured repo has a
 // 7-stage pipeline and says so — rather than scheduling a stage that can only no-op.
 export const scheduledStages = (cfg = {}) => STAGES.filter(s => s.key !== 'deploy' || !!cfg.deploy);
@@ -189,9 +231,10 @@ export const STAGES = [
   },
   {
     n: 3, key: 'implement', title: 'Implement', skill: 'executing-plans',
-    prompt: (run) => hasSpecSet(run)
+    prompt: (run) => (hasSpecSet(run)
       ? `Use the executing-plans skill if it is installed; otherwise implement tasks.md from ${specRef(run)} in this repository yourself, task by task, test-driven, committing after each task and ticking each task checkbox (- [x] T###) in tasks.md as you complete it. All tests must pass before you finish.`
-      : `There is no spec set for this work; implement ${requirementRef(run)}\nWork test-driven: write a failing test that pins the requirement (its acceptance criteria where it states them) before the change, make it pass, keep every existing test green, and commit. Do not create a specs/ directory. All tests must pass before you finish.`,
+      : `There is no spec set for this work; implement ${requirementRef(run)}\nWork test-driven: write a failing test that pins the requirement (its acceptance criteria where it states them) before the change, make it pass, keep every existing test green, and commit. Do not create a specs/ directory. All tests must pass before you finish.`)
+      + designClause(run),
     check: (run) => {
       if (hasSpecSet(run)) {
         const tasks = readFileSync(specFile(run, 'tasks.md'), 'utf8');
@@ -208,8 +251,8 @@ export const STAGES = [
   {
     n: 4, key: 'verify', title: 'Verify', skill: 'speckit-verify',
     prompt: (run) => !hasSpecSet(run)
-      ? `Run a post-implementation verification gate on ${requirementRef(run)}\nThere is no spec set; verify the commits on this branch against that requirement and its acceptance criteria, plus the constitution (if present): (A) every claimed change exists in the files it names; (B) each acceptance criterion has implementation evidence in code; (C) each has a real test; (D) behaviour matches the requirement's stated expectations. If you find fixable gaps, fix them, keep tests green, and commit. Then write your final verdict as JSON to .autodev/verify.json in the repo root: {"verdict":"PASS"|"FAIL","findings":[{"id":"C1","category":"...","severity":"CRITICAL"|"HIGH"|"MEDIUM"|"LOW","summary":"..."}]}. PASS only if no CRITICAL or HIGH findings remain.`
-      : `Run a post-implementation verification gate on ${specRef(run)}. Follow .specify/extensions/verify/commands/verify.md (the /speckit.verify.run command) if it exists in this repo; otherwise verify yourself against spec.md, plan.md, tasks.md and the constitution (if present): (A) task truthfulness — every ticked task's referenced files exist and contain the claimed change; (B) requirement coverage — each functional requirement has implementation evidence in code; (C) scenario/test coverage — acceptance scenarios and edge cases map to real tests; (D) spec intent — behaviour matches acceptance criteria, including spec revisions made after implementation started. If you find fixable gaps: append new unchecked checkbox tasks to tasks.md (never edit or delete existing entries), implement them, tick them, keep tests green, and commit. Then write your final verdict as JSON to .autodev/verify.json in the repo root: {"verdict":"PASS"|"FAIL","findings":[{"id":"C1","category":"...","severity":"CRITICAL"|"HIGH"|"MEDIUM"|"LOW","summary":"..."}]}. PASS only if no CRITICAL or HIGH findings remain.`,
+      ? `Run a post-implementation verification gate on ${requirementRef(run)}\nThere is no spec set; verify the commits on this branch against that requirement and its acceptance criteria, plus the constitution (if present): (A) every claimed change exists in the files it names; (B) each acceptance criterion has implementation evidence in code; (C) each has a real test; (D) behaviour matches the requirement's stated expectations. ${designVerifyClause(run)} If you find fixable gaps, fix them, keep tests green, and commit. Then write your final verdict as JSON to .autodev/verify.json in the repo root: {"verdict":"PASS"|"FAIL","findings":[{"id":"C1","category":"...","severity":"CRITICAL"|"HIGH"|"MEDIUM"|"LOW","summary":"..."}]}. PASS only if no CRITICAL or HIGH findings remain.`
+      : `Run a post-implementation verification gate on ${specRef(run)}. Follow .specify/extensions/verify/commands/verify.md (the /speckit.verify.run command) if it exists in this repo; otherwise verify yourself against spec.md, plan.md, tasks.md and the constitution (if present): (A) task truthfulness — every ticked task's referenced files exist and contain the claimed change; (B) requirement coverage — each functional requirement has implementation evidence in code; (C) scenario/test coverage — acceptance scenarios and edge cases map to real tests; (D) spec intent — behaviour matches acceptance criteria, including spec revisions made after implementation started.${designVerifyClause(run)} If you find fixable gaps: append new unchecked checkbox tasks to tasks.md (never edit or delete existing entries), implement them, tick them, keep tests green, and commit. Then write your final verdict as JSON to .autodev/verify.json in the repo root: {"verdict":"PASS"|"FAIL","findings":[{"id":"C1","category":"...","severity":"CRITICAL"|"HIGH"|"MEDIUM"|"LOW","summary":"..."}]}. PASS only if no CRITICAL or HIGH findings remain.`,
     check: (run) => {
       const p = join(run.worktree, '.autodev/verify.json');
       need(existsSync(p), 'verify.json not written by verify session');
@@ -217,6 +260,12 @@ export const STAGES = [
       const blocking = findings.filter(f => /^(CRITICAL|HIGH)$/i.test(f.severity));
       need(verdict === 'PASS' && blocking.length === 0,
         `verify verdict: ${verdict} — ${blocking.length} critical/high finding(s) remain`);
+      // A PASS on a design ticket means someone looked at the two pictures side by side.
+      // Without the compare image there is no evidence that happened, and "looks right" is
+      // exactly the claim this pipeline exists not to take on trust.
+      if (designRefs(run).length)
+        need(designCompares(run).length > 0,
+          `no ${DESIGN_DIR}/compare-*.png — the design references (${designRefs(run).join(', ')}) were never compared to the built UI`);
     },
   },
   {

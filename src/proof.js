@@ -18,11 +18,24 @@ const STAGE_ARTIFACTS = (runDir) => ({
   deploy: [[join(runDir, 'deploy-output.txt'), 'deploy-output.txt']],
 });
 
+// The side-by-sides a design ticket's Verify stage produced. Named by the session rather
+// than by us, so they are discovered instead of listed — and they are the one artifact a
+// person reading the ticket can judge without opening the app.
+const designCompareFiles = (worktree) => {
+  try {
+    return readdirSync(join(worktree, '.autodev/design'))
+      .filter(f => /^compare-.*\.(png|jpe?g|webp)$/i.test(f)).sort()
+      .map(f => [join('.autodev/design', f), f]);
+  } catch { return []; }
+};
+
 // Copy what a stage produced into proof/. A missing artifact is skipped, never invented:
 // the Jira comment later says what was collected, and only that.
 export function collectProof({ runDir, worktree, stageKey }) {
   const copied = [];
-  for (const [src, name] of STAGE_ARTIFACTS(runDir)[stageKey] ?? []) {
+  const artifacts = [...(STAGE_ARTIFACTS(runDir)[stageKey] ?? []),
+    ...(stageKey === 'verify' ? designCompareFiles(worktree) : [])];
+  for (const [src, name] of artifacts) {
     const from = isAbsolute(src) ? src : join(worktree, src);
     if (!existsSync(from)) continue;
     mkdirSync(proofDir(runDir), { recursive: true });

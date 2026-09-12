@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { openDb, getRun, updateRun, runDir, PORT, skippedSet, AUTODEV_HOME } from './db.js';
 import { emit } from './events.js';
 import { STAGES, scheduledStages, untilStage, detectTestCmd, findSpecDir, specDirs,
-         holdoutPrompt, holdoutFixPrompt, stageN } from './stages.js';
+         holdoutPrompt, holdoutFixPrompt, stageN, DESIGN_DIR, designRefs } from './stages.js';
 import { repoConfig, modelFor, effortFor } from './config.js';
 import { parseClaudeResult } from './metrics.js';
 import { causeLine, classify, sessionBlock } from './session.js';
@@ -44,6 +44,33 @@ const cfg = repoConfig(run.worktree);
 await ev({ type: 'activity', stage: run.stage, detail: existsSync(join(run.worktree, '.autodev.json'))
   ? `config .autodev.json: ${Object.keys(cfg).length ? Object.entries(cfg).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(' ').slice(0, 200) : 'present but empty or unparseable'}`
   : 'config: no .autodev.json in the worktree, defaults apply' });
+// Design references. A ticket that asks for a screen usually carries a picture of it, and
+// until these are on disk the Implement session is working from the words alone. Pulled once
+// per run and left in the worktree (untracked), so a resume reuses them rather than
+// re-downloading. Best-effort throughout: a run whose ticket has no pictures, or whose Jira
+// is unreachable, proceeds exactly as before — the appearance gate in stages.js simply stays
+// quiet when the directory is empty.
+{
+  const key = String(run.jira_key ?? run.issue_ref ?? '');
+  const dir = join(run.worktree, DESIGN_DIR);
+  if (/^[A-Z][A-Z0-9]+-\d+$/.test(key) && !designRefs(run).length) {
+    try {
+      const { loadConfig, configComplete, fetchDesignRefs } = await import('./jira-queue.js');
+      const jcfg = loadConfig();
+      if (configComplete(jcfg)) {
+        const got = await fetchDesignRefs(jcfg, key, dir,
+          (m) => ev({ type: 'activity', stage: run.stage, detail: m }));
+        if (got.length)
+          await ev({ type: 'activity', stage: run.stage,
+            detail: `design references from ${key}: ${got.join(', ')} → ${DESIGN_DIR}/` });
+      }
+    } catch (e) {
+      await ev({ type: 'activity', stage: run.stage,
+        detail: `design references unavailable: ${String(e.message || e).slice(0, 120)}` });
+    }
+  }
+}
+
 // Running cost for THIS run — seeded from prior metrics events so resume keeps counting.
 let costUsd = 0;
 try {

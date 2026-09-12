@@ -119,6 +119,52 @@ export async function attachProof(cfg, key, dir, log = () => {}) {
   return attached;
 }
 
+// ---- design references ----
+// A ticket that asks for a screen usually carries a picture of it. Nothing in the pipeline
+// used to look at those attachments, so a session implemented "match the attached design"
+// having never seen the design — and the run closed the ticket on a UI nobody had compared
+// to anything. These pull the pictures into the worktree, where the Implement and Verify
+// sessions can open them.
+
+/** Images only, and only ones big enough to be a design rather than an icon or a logo. */
+export const isDesignImage = (a) =>
+  /^image\/(png|jpe?g|webp|gif|avif)$/i.test(String(a?.mimeType ?? '')) && Number(a?.size ?? 0) >= 20_000;
+
+/** A name that is safe to write to disk: no separators, no traversal, no surprises. */
+export const designFileName = (filename, id) => {
+  const clean = String(filename ?? '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[-.]+/, '').slice(-80);
+  return clean && /\.[A-Za-z0-9]+$/.test(clean) ? clean : `attachment-${id}.png`;
+};
+
+/**
+ * Download an issue's design images into `dir`. Returns the names written.
+ *
+ * Best-effort by design: a ticket with no pictures, an attachment endpoint that refuses, or
+ * a network that is down all return what was managed rather than throwing. A missing design
+ * reference must not park a run — it only means the appearance gate below stays quiet.
+ */
+export async function fetchDesignRefs(cfg, key, dir, log = () => {}) {
+  const written = [];
+  try {
+    const d = await jira(cfg, 'GET', `/rest/api/3/issue/${key}?fields=attachment`);
+    const shots = (d.fields?.attachment ?? []).filter(isDesignImage);
+    if (!shots.length) return written;
+    mkdirSync(dir, { recursive: true });
+    for (const a of shots) {
+      try {
+        const res = await fetch(a.content, { headers: {
+          authorization: 'Basic ' + Buffer.from(`${cfg.email}:${cfg.apiToken}`).toString('base64'),
+        } });
+        if (!res.ok) { log(`${key}: could not fetch ${a.filename} — ${res.status}`); continue; }
+        const name = designFileName(a.filename, a.id);
+        writeFileSync(join(dir, name), Buffer.from(await res.arrayBuffer()));
+        written.push(name);
+      } catch (e) { log(`${key}: could not fetch ${a.filename} — ${String(e.message || e).slice(0, 120)}`); }
+    }
+  } catch (e) { log(`${key}: could not list attachments — ${String(e.message || e).slice(0, 120)}`); }
+  return written;
+}
+
 export async function openStories(cfg) {
   const jql = `project=${cfg.project} AND statusCategory != Done ORDER BY created ASC`;
   const d = await jira(cfg, 'GET',

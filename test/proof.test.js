@@ -101,3 +101,20 @@ test('a direct-push run reports the push and the fast-forward instead of a pull 
   assert.match(by.Merged, /fast-forward/);
   assert.match(r.headline, /merged and deployed\.$/);
 });
+
+test('verify collects the design side-by-sides, so the ticket carries the comparison', () => {
+  const runDir = mkdtempSync(join(tmpdir(), 'run-'));
+  const wt = mkdtempSync(join(tmpdir(), 'wt-'));
+  mkdirSync(join(wt, '.autodev/design'), { recursive: true });
+  writeFileSync(join(wt, '.autodev/verify.json'), JSON.stringify({ verdict: 'PASS' }));
+  writeFileSync(join(wt, '.autodev/design/card.png'), 'the reference');
+  writeFileSync(join(wt, '.autodev/design/compare-card.png'), 'side by side');
+  writeFileSync(join(wt, '.autodev/design/compare-list.webp'), 'side by side');
+
+  const copied = collectProof({ runDir, worktree: wt, stageKey: 'verify' });
+  assert.deepEqual(copied.sort(), ['compare-card.png', 'compare-list.webp', 'verify.json']);
+  // the reference itself is not evidence of anything — only the comparison is
+  assert.ok(!copied.includes('card.png'));
+  // and a stage that is not verify does not sweep them up
+  assert.deepEqual(collectProof({ runDir, worktree: wt, stageKey: 'review' }), []);
+});

@@ -339,11 +339,35 @@ starts fresh at stage 1. To force a specific spec, pass `--spec <path>`.
   and the whole run has a wall-clock budget (default 6h) — it parks rather
   than looping forever.
 
+## Design references
+
+A ticket that asks for a screen usually carries a picture of it. Before the first
+session starts, a run whose Jira issue has image attachments downloads them into
+`.autodev/design/` in the worktree — so the Implement session is told to match
+*those files, by name*, instead of matching a description of them.
+
+Verify then treats appearance as a criterion of its own: it renders the built UI,
+puts it beside each reference, and saves the side-by-side as
+`.autodev/design/compare-<screen>.png`. **A design ticket cannot leave Verify
+without one** — a reference with no comparison parks the run, because "it looks
+right" is exactly the claim this pipeline exists not to take on trust. Those
+comparison images are collected into the run's proof and attached to the ticket,
+so whoever asked for the design sees both halves without checking anything out.
+
+The `autodev-pixel-match` skill (`autodev install-skill`) carries the loop the
+session follows: crop and read the reference properly, sample its colours instead
+of estimating them, render the real component, screenshot it headlessly, compose
+the side-by-side, name the differences, correct one, go round again.
+
+Tickets with no attachments are unaffected — the gate stays quiet when the
+directory is empty, and a Jira that cannot be reached never parks a run over it.
+
 ## Skill composition
 
 autodev's stage prompts prefer a few Claude Code skills if you have them
 installed — a GitHub-Spec-Kit-style spec skill, an execute-plan skill, a
-commit/push/PR skill, a code-review skill, a systematic-debugging skill —
+commit/push/PR skill, a code-review skill, a systematic-debugging skill, and
+`autodev-pixel-match` when the ticket carries a design —
 but every stage also carries an inline fallback describing exactly what
 artifact it needs, so the pipeline works with a stock Claude Code install
 too. Installed skills just tend to produce better results.

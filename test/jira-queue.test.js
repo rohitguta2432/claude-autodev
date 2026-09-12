@@ -3,13 +3,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 process.env.AUTODEV_HOME = mkdtempSync(join(tmpdir(), 'autodev-jq-'));
 const { openDb, createRun, updateRun, runDir } = await import('../src/db.js');
-const { tick, dispatchPlan, outcomeFor } = await import('../src/jira-queue.js');
+const { tick, dispatchPlan, outcomeFor, isDesignImage, designFileName, fetchDesignRefs } = await import('../src/jira-queue.js');
 
 // A Jira that records every request. `failAttach` makes the attachment endpoint 500.
 function stubJira({ failAttach = false } = {}) {
@@ -178,4 +178,49 @@ test('a RUNNING run moves its To Do ticket to In Progress exactly once; an In Pr
   await tick({ reconcileOnly: true });
   assert.deepEqual(posts().filter(([, id]) => id === '41').map(([k]) => k).sort(), ['SCRUM-901', 'SCRUM-902']);
   server.close();
+});
+
+/* ---- design references: the pictures on a ticket, pulled into the worktree ---- */
+
+test('only real images count as design references', () => {
+  const big = 40_000;
+  assert.equal(isDesignImage({ mimeType: 'image/png', size: big }), true);
+  assert.equal(isDesignImage({ mimeType: 'image/jpeg', size: big }), true);
+  assert.equal(isDesignImage({ mimeType: 'application/pdf', size: big }), false, 'a spec PDF is not a design reference');
+  assert.equal(isDesignImage({ mimeType: 'image/png', size: 900 }), false, 'an icon is not a design reference');
+  assert.equal(isDesignImage({}), false);
+});
+
+test('attachment names are made safe before they reach the filesystem', () => {
+  assert.equal(designFileName('WhatsApp Image 2026-09-12 at 15.39.56.jpeg', '1'),
+    'WhatsApp-Image-2026-09-12-at-15.39.56.jpeg');
+  assert.equal(designFileName('../../etc/passwd.png', '2'), 'etc-passwd.png');
+  assert.equal(designFileName('no-extension', '3'), 'attachment-3.png');
+  assert.equal(designFileName('', '4'), 'attachment-4.png');
+});
+
+test('design images are downloaded to the worktree; anything else is left behind', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'design-'));
+  const server = createServer((req, res) => {
+    if (req.url.includes('fields=attachment')) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      const base = `http://127.0.0.1:${server.address().port}`;
+      return res.end(JSON.stringify({ fields: { attachment: [
+        { id: '1', filename: 'card.png', mimeType: 'image/png', size: 50_000, content: `${base}/file/card` },
+        { id: '2', filename: 'spec.pdf', mimeType: 'application/pdf', size: 90_000, content: `${base}/file/spec` },
+      ] } }));
+    }
+    res.writeHead(200, { 'content-type': 'image/png' });
+    res.end(Buffer.from('PNGDATA'));
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const cfg = { baseUrl: `http://127.0.0.1:${server.address().port}`, email: 'e@x', apiToken: 't', project: 'SCRUM', repoPath: dir };
+
+  const got = await fetchDesignRefs(cfg, 'SCRUM-9', join(dir, 'design'));
+  assert.deepEqual(got, ['card.png']);
+  assert.equal(readFileSync(join(dir, 'design', 'card.png'), 'utf8'), 'PNGDATA');
+
+  server.close();
+  // Jira unreachable: a run must proceed without design references, never park on them.
+  assert.deepEqual(await fetchDesignRefs(cfg, 'SCRUM-9', join(dir, 'gone')), []);
 });
