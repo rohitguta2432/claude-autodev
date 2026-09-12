@@ -43,7 +43,23 @@ canvas, not a number that felt right.
 
 Render the real component — the one that ships — not a mock-up of it in a scratch file. For a
 server-rendered component, `renderToStaticMarkup` into a small HTML file with the same fonts
-the app loads; for a page, run the app. Then screenshot it headlessly:
+the app loads; for a page, run the app.
+
+**Give the harness the app's CSS context, or it will lie to you.** A scratch HTML file has
+none of the resets the app ships, and the difference is not subtle: Tailwind's preflight sets
+`box-sizing: border-box` on everything, so a panel declared `width: 104mm; padding: 0 8mm`
+is 104mm wide in the app and **120mm wide in your harness**. You will then spend a round
+"fixing" a width that was never wrong, and any export built from that harness — a PDF, a
+printable sheet — ships the defect even though the app is correct. At minimum:
+
+```css
+*, *::before, *::after { box-sizing: border-box; }
+```
+
+Better: link or inline the app's own global stylesheet. Whatever the app loads before the
+component, load it here, in the same order.
+
+Then screenshot it headlessly:
 
 ```
 chrome --headless=new --disable-gpu --hide-scrollbars --no-first-run \
@@ -56,7 +72,27 @@ Chrome is `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome` on macO
 on Windows; Edge (`msedge`) takes the same flags. Give web fonts a virtual-time budget or the
 screenshot catches the fallback face and you will "fix" type that was never wrong.
 
-**4. Put them side by side and look.**
+**4. Find the rendered element's real bounds — never assume the crop.**
+
+Padding, centring, a scrollbar, device pixel ratio: any of them move the thing you rendered.
+Crop by arithmetic and every measurement afterwards is offset by the error, which shows up as
+a uniform shift you will misread as a design difference. Render onto a colour that cannot
+occur in the design and find the bounds:
+
+```python
+import numpy as np
+from PIL import Image
+a = np.asarray(Image.open("shot.png").convert("RGB"))
+bg = (a[:,:,0] > 200) & (a[:,:,1] < 80) & (a[:,:,2] > 200)   # magenta sentinel
+cols, rows = np.where(~bg.all(0))[0], np.where(~bg.all(1))[0]
+box = (cols.min(), rows.min(), cols.max() + 1, rows.max() + 1)
+print(box, "px per mm:", (box[2] - box[0]) / 148)
+```
+
+A stripe of the sentinel colour surviving along one edge of your side-by-side is the tell that
+the crop is wrong. Do not ignore it.
+
+**5. Put them side by side and look.**
 
 ```python
 from PIL import Image
@@ -71,10 +107,72 @@ out.save(".autodev/design/compare-<screen>.png")
 Then read that image and name the differences out loud — position, weight, spacing, hue, one
 at a time. Naming them is what stops "it's close" from ending the loop early.
 
-**5. Correct one thing at a time, and go round again.**
+**6. Correct one thing at a time, and go round again.**
 
 Two or three rounds is normal; one is suspicious. Stop when the two halves read as the same
 screen, not as one inspired by the other.
+
+## Score the match, don't only look at it
+
+The eye is unreliable about scale and position, and confidently so. Three of the five things
+one reviewer "could see" were wrong: the panel width and its crown height already matched to
+a fraction of a millimetre, and the side ribbons were where they belonged — the eye was
+reading the difference between a 2:3 photograph and a 0.705 card. Measure instead.
+
+Classify both images to the design's own palette and diff the classes, which ignores JPEG
+noise and lighting while catching every real difference of shape:
+
+```python
+PAL = {"camel": (205,155,99), "rust": (168,70,30), "cream": (241,229,205),
+       "dark": (45,22,11), "white": (253,253,253)}
+N = (148, 210)   # one cell per millimetre of the real object
+def classes(im):
+    a = np.asarray(im.resize(N, Image.LANCZOS)).astype(float)
+    return np.stack([((a - np.array(c)) ** 2).sum(2) for c in PAL.values()]).argmin(0)
+A, B = classes(reference), classes(ours)
+mask = np.ones_like(A, bool)
+mask[83:150, 38:111] = False        # the QR plate: two different URLs, meaningless to diff
+d = (A != B) & mask
+print(f"{d.sum() / mask.sum() * 100:.1f}% mismatch")
+```
+
+Then report the worst 20mm blocks with their dominant before/after class. That names the next
+fix instead of leaving you to guess it, and it gives the ticket a number: 24.7% → 8.0% is an
+argument; "looks much closer now" is not.
+
+**Mask what is legitimately different.** A QR code carrying a different URL differs in half its
+modules and will dominate the score. So will live copy, a different table number, a real photo.
+Exclude those regions explicitly rather than letting them drown the signal.
+
+## When the shapes will not converge, trace them
+
+Two rounds of hand-drawn curves that still do not match is the signal to stop drawing. Trace
+the artwork instead: cluster it into its own colours, find each region as a connected
+component, walk the boundary, simplify, and emit the outline in the object's real units.
+
+```python
+lab = kmeans_labels(image, k=6)                 # the design's own palette, found not assumed
+for m in connected_components(lab == rust_k, min_px=700):
+    pts = rdp(moore_boundary(m), eps=1.6)       # simplify to ~1.5mm
+    print("M" + " L".join(f"{x*MMX:.1f} {y*MMY:.1f}" for y, x in pts) + " Z")
+```
+
+This is still drawing — the output is paths in your own coordinate system, themeable,
+printable at any size, with your own data inside — and it is how you find what looking cannot:
+a ribbon that continues *behind* an overlapping panel rather than stopping at its edge, or a
+"third tone" that turns out to be JPEG blending between two real ones and should not be drawn
+at all.
+
+Three rules keep a trace honest:
+
+- **Drop what belongs to the content, not the artwork.** Type, buttons and plates cluster as
+  dark or accent regions too. Discard components whose bounding box falls wholly inside the
+  content area — otherwise you will trace the reference's own words into your background.
+- **Trace holes as well as outlines.** A single outer contour fills the gaps between leaves or
+  letterforms and the result reads heavy. Flood the complement inside the bounding box; what
+  the border cannot reach is a hole, and belongs in the path with `fill-rule: evenodd`.
+- **Work at half resolution.** 0.3mm precision, four times faster, and the simplification step
+  removes finer detail than that anyway.
 
 ## What usually differs, in the order it usually matters
 
@@ -99,8 +197,13 @@ screen, not as one inspired by the other.
 - Draw it rather than embedding a copy of the reference: a screenshot pasted in as an image
   matches perfectly and is worth nothing. It cannot be themed, printed at another size, or
   given a different table number.
+- Anything you export — a PDF, a printable sheet, a hosted page — must be built in the same
+  CSS context as the app, for the same reason the harness must. An export generated from a
+  bare template can ship a defect the running app does not have, and nobody looks twice at a
+  PDF that was "generated from the deployed code".
 - Say what still differs. A report that claims a match the side-by-side does not show is
-  worse than one that names the gap, because the next person will not look again.
+  worse than one that names the gap, because the next person will not look again. Give the
+  number: a mismatch percentage with its exclusions stated beats an adjective.
 
 ## Leave the evidence
 
