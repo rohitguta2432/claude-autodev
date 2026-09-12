@@ -18,9 +18,11 @@ const STAGE_ARTIFACTS = (runDir) => ({
   deploy: [[join(runDir, 'deploy-output.txt'), 'deploy-output.txt']],
 });
 
-// The side-by-sides a design ticket's Verify stage produced. Named by the session rather
-// than by us, so they are discovered instead of listed — and they are the one artifact a
-// person reading the ticket can judge without opening the app.
+// The side-by-sides a design ticket produced. Named by the session rather than by us, so they
+// are discovered instead of listed — and they are the one artifact a person reading the ticket
+// can judge without opening the app. Swept at every stage, not just Verify: a repo that skips
+// Verify still produces them in Implement, and gating on one stage meant a design ticket closed
+// with prod screenshots but no comparison — the one thing it was raised about.
 const designCompareFiles = (worktree) => {
   try {
     return readdirSync(join(worktree, '.autodev/design'))
@@ -33,8 +35,7 @@ const designCompareFiles = (worktree) => {
 // the Jira comment later says what was collected, and only that.
 export function collectProof({ runDir, worktree, stageKey }) {
   const copied = [];
-  const artifacts = [...(STAGE_ARTIFACTS(runDir)[stageKey] ?? []),
-    ...(stageKey === 'verify' ? designCompareFiles(worktree) : [])];
+  const artifacts = [...(STAGE_ARTIFACTS(runDir)[stageKey] ?? []), ...designCompareFiles(worktree)];
   for (const [src, name] of artifacts) {
     const from = isAbsolute(src) ? src : join(worktree, src);
     if (!existsSync(from)) continue;

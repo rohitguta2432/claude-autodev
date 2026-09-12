@@ -102,7 +102,7 @@ test('a direct-push run reports the push and the fast-forward instead of a pull 
   assert.match(r.headline, /merged and deployed\.$/);
 });
 
-test('verify collects the design side-by-sides, so the ticket carries the comparison', () => {
+test('any stage collects the design side-by-sides, so the ticket carries the comparison', () => {
   const runDir = mkdtempSync(join(tmpdir(), 'run-'));
   const wt = mkdtempSync(join(tmpdir(), 'wt-'));
   mkdirSync(join(wt, '.autodev/design'), { recursive: true });
@@ -115,6 +115,20 @@ test('verify collects the design side-by-sides, so the ticket carries the compar
   assert.deepEqual(copied.sort(), ['compare-card.png', 'compare-list.webp', 'verify.json']);
   // the reference itself is not evidence of anything — only the comparison is
   assert.ok(!copied.includes('card.png'));
-  // and a stage that is not verify does not sweep them up
-  assert.deepEqual(collectProof({ runDir, worktree: wt, stageKey: 'review' }), []);
+});
+
+test('a repo that skips Verify still ships the comparison — Implement made it, Deploy carries it', () => {
+  const runDir = mkdtempSync(join(tmpdir(), 'run-'));
+  const wt = mkdtempSync(join(tmpdir(), 'wt-'));
+  mkdirSync(join(wt, '.autodev/design'), { recursive: true });
+  writeFileSync(join(wt, '.autodev/design/compare-category-popup.png'), 'side by side');
+  writeFileSync(join(runDir, 'deploy-output.txt'), 'deployed');
+
+  // SCRUM-87: skip=["verify"], so the side-by-side was written during Implement and the old
+  // verify-only sweep left the ticket closed with prod screenshots and no comparison.
+  assert.deepEqual(collectProof({ runDir, worktree: wt, stageKey: 'implement' }),
+    ['compare-category-popup.png']);
+  assert.deepEqual(collectProof({ runDir, worktree: wt, stageKey: 'deploy' }).sort(),
+    ['compare-category-popup.png', 'deploy-output.txt']);
+  assert.ok(proofFiles(runDir).some(f => f.name === 'compare-category-popup.png'));
 });
