@@ -41,7 +41,13 @@ const TERMINAL = [
   },
   {
     code: 'usage-exhausted',
-    match: /usage limit reached|exceeded your .{0,40}\blimit\b|credit balance is too low|insufficient (credits|quota)/i,
+    // The CLI says "You've hit your weekly limit · resets 9:30pm (Asia/Calcutta)". The first
+    // cut of this pattern was written against "usage limit reached" and "exceeded your …
+    // limit" and matched neither of those words, so the real message fell through to the
+    // ordinary retry path: run #567 bought three identical sessions in 18 seconds against an
+    // allowance that reset four minutes later, spent the stage's whole retry budget, and
+    // parked anyway. "hit your … limit" is the wording that actually arrives.
+    match: /\blimit reached\b|(exceeded|hit) your .{0,40}\blimit\b|\b(weekly|daily|monthly|\d+-hour) limit\b|credit balance is too low|insufficient (credits|quota)/i,
     reason: 'the Claude usage allowance for this account is exhausted',
     fix: 'wait for the allowance to reset or raise it, then `autodev resume <id>`',
   },
@@ -59,7 +65,14 @@ export function classify({ code, out } = {}) {
   }
   const text = String(out ?? '');
   for (const c of TERMINAL) {
-    if (c.match.test(text)) return { code: c.code, reason: c.reason, fix: c.fix };
+    if (!c.match.test(text)) continue;
+    // "· resets 9:30pm (Asia/Calcutta)" — when the message says when, say when. A park that
+    // names the hour is one an operator can act on without going to find the raw output.
+    const resets = /resets?\s+([^)\n]{1,40}\)|[0-9][^·\n]{0,30})/i.exec(text);
+    const fix = resets && c.code === 'usage-exhausted'
+      ? `resets ${resets[1].trim()} — \`autodev resume <id>\` after that`
+      : c.fix;
+    return { code: c.code, reason: c.reason, fix };
   }
   return null; // fail open: an unrecognized failure keeps today's behaviour exactly
 }

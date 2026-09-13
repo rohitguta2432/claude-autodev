@@ -40,6 +40,24 @@ test('classify: recognises the two textual conditions and names a remedy', () =>
   assert.match(usage.fix, /reset|raise/);
 });
 
+test('classify: the wording the CLI actually uses for a limit parks on the first attempt', () => {
+  // Run #567, 2026-09-13. This exact string fell through the classifier: three sessions
+  // bought in 18 seconds against an allowance that reset four minutes later, the stage's
+  // retry budget spent, and the run parked anyway — for two hours, until a person resumed it.
+  const weekly = classify({ out: "You've hit your weekly limit · resets 9:30pm (Asia/Calcutta)" });
+  assert.equal(weekly?.code, 'usage-exhausted');
+  // The message says when; the park reason must say when.
+  assert.match(weekly.fix, /resets 9:30pm \(Asia\/Calcutta\)/);
+  assert.match(weekly.fix, /autodev resume/);
+
+  // The other shapes the CLI produces.
+  assert.equal(classify({ out: '5-hour limit reached · resets 3am' })?.code, 'usage-exhausted');
+  assert.equal(classify({ out: "You've hit your usage limit" })?.code, 'usage-exhausted');
+
+  // Rate limiting is NOT a park — that is what retries are for (see TERMINAL's note).
+  assert.equal(classify({ out: 'the tests hit the rate limit and passed on retry' }), null);
+});
+
 test('classify: fails open on anything unrecognised', () => {
   assert.equal(classify({ out: 'TypeError: undefined is not a function' }), null);
   assert.equal(classify({ out: '' }), null);
