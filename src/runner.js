@@ -268,6 +268,43 @@ async function pushDirect(stage) {
 }
 // Did an EARLIER attempt of this run already land? Only a resume has a 'merged' event on
 // file — the current attempt writes its own after the check below.
+// Did this run's Implement stage write any commit?
+//
+// Stage 8 has to tell two opposite things apart, and "is HEAD an ancestor of origin/base"
+// says the same about both: a branch whose implement stage produced NOTHING (must not
+// deploy — it would ship, test and close a ticket on somebody else's commit), and a branch
+// whose own commits have already reached the base by another route (must continue — the work
+// exists and is landed). Run #564 was the second and was reported as the first: "the
+// implement stage produced no code", while its code sat on main, deployed, and its ticket
+// stayed open for a person to close.
+//
+// No reading of git at stage 8 can separate them, and neither can one at push time: by then
+// the branch is rebased onto the base, and an empty branch and a landed one both have HEAD
+// exactly at the base tip. So the question is asked where it has an answer — around the
+// Implement stage itself, in the worktree, before anything is pushed or landed. A run that
+// merged the base into its branch counts those commits too; that is the safe direction to
+// be wrong in, and the case this exists for (a stage that wrote literally nothing) is
+// unaffected.
+const implementBaseFile = () => join(ctx.runDir, 'implement.base');
+const wroteFile = () => join(ctx.runDir, 'commits.count');
+// Once per run, kept across resumes: the sha the branch had before Implement first ran.
+const markImplementStart = () => {
+  try {
+    if (existsSync(implementBaseFile())) return;
+    writeFileSync(implementBaseFile(), gitq(['rev-parse', 'HEAD']).trim());
+  } catch { /* the land stage falls back to the older, narrower check */ }
+};
+const recordCommitsWritten = () => {
+  try {
+    const before = readFileSync(implementBaseFile(), 'utf8').trim();
+    if (!before) return;
+    writeFileSync(wroteFile(), gitq(['rev-list', '--count', `${before}..HEAD`]).trim());
+  } catch { /* likewise */ }
+};
+const wroteCommits = () => {
+  try { return Number(readFileSync(wroteFile(), 'utf8').trim()) > 0; } catch { return false; }
+};
+
 const priorMerge = () => {
   try {
     return readFileSync(join(ctx.runDir, 'events.jsonl'), 'utf8').split('\n')
@@ -292,10 +329,13 @@ async function landDirect(stage) {
     // would test, deploy and report on code this run never wrote. That is how run #19 closed
     // SCRUM-85 with an empty branch and a deploy of the commit already on main. A prior
     // 'merged' event is what separates the two.
-    if (!priorMerge()) throw Object.assign(new Error(
+    const wrote = wroteCommits();
+    if (!priorMerge() && !wrote) throw Object.assign(new Error(
       `nothing to land: ${run.branch} has no commits over origin/${base} — the implement stage produced no code`),
       { final: true });
-    await ev({ type: 'merged', stage: stage.n, detail: `${head.slice(0, 12)} (already on ${base} before this attempt)` });
+    await ev({ type: 'merged', stage: stage.n, detail: wrote && !priorMerge()
+      ? `${head.slice(0, 12)} (this run's commits already on ${base} — landed outside this attempt)`
+      : `${head.slice(0, 12)} (already on ${base} before this attempt)` });
     return;
   }
   await ev({ type: 'activity', stage: stage.n, detail: `landing ${run.branch} on ${base} (fast-forward push, pushMode direct)` });
@@ -520,6 +560,7 @@ for (const stage of PIPELINE.filter(s => s.n >= run.stage && s.n <= until && !sk
   if (Date.now() - started > CFG.budgetHours * 3_600_000) await park(stage, new Error('wall-clock budget exceeded'));
   saveState({ stage: stage.n });
   await ev({ type: 'stage_started', stage: stage.n, detail: stage.title });
+  if (stage.key === 'implement') markImplementStart();
   // What proof/ held before this stage — the diff afterwards is what the stage contributed,
   // including files a deploy proof command wrote there itself.
   const proofBefore = new Set(proofFiles(ctx.runDir).map(f => f.name));
@@ -599,6 +640,7 @@ for (const stage of PIPELINE.filter(s => s.n >= run.stage && s.n <= until && !sk
       }
     }
   }
+  if (stage.key === 'implement') recordCommitsWritten();
   await ev({ type: 'stage_done', stage: stage.n, detail: stage.title });
 }
 saveState({ status: 'DONE' });

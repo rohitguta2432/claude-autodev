@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -368,7 +368,7 @@ function makeDirectRepo(cfg = {}) {
 // A stub that answers `auth status` and otherwise implements spec-less: commit what is there.
 // implement=false: a session that burns its turn and writes nothing — the shape that let
 // run #19 reach deploy on an empty branch.
-const directStubJs = (calls, { loggedIn = true, implement = true } = {}) => `
+const directStubJs = (calls, { loggedIn = true, implement = true, landEarly = false } = {}) => `
 const fs = require('node:fs'); const cp = require('node:child_process');
 if (process.argv[2] === 'auth') { process.stdout.write(JSON.stringify({ loggedIn: ${loggedIn}, email: 'x@y' })); process.exit(0); }
 const p = String(process.argv[3] ?? '');
@@ -376,15 +376,22 @@ fs.appendFileSync(${JSON.stringify(calls)}, p.slice(0, 40) + '\\n');
 ${implement ? `
 cp.execFileSync('git', ['add', '-A'], { stdio: 'ignore' });
 cp.execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'impl'], { stdio: 'ignore' });
+${landEarly ? `
+// The run's own work reaches the base before stage 8 looks — somebody merging the branch,
+// a second session pushing it, a queue reconciling it. Run #564's shape.
+cp.execFileSync('git', ['fetch', '-q', 'origin', 'main'], { stdio: 'ignore' });
+cp.execFileSync('git', ['rebase', '-q', 'origin/main'], { stdio: 'ignore' });
+cp.execFileSync('git', ['push', '-q', 'origin', 'HEAD:main'], { stdio: 'ignore' });
+` : ''}
 ` : `
 // the session wrote nothing and left the tree exactly as it found it — run #19's shape,
 // which the uncommitted-changes guard does not catch
 cp.execFileSync('git', ['clean', '-fdq'], { stdio: 'ignore' });
 `}`;
-function runDirect({ loggedIn = true, implement = true, before = () => {}, cfg = {} } = {}) {
+function runDirect({ loggedIn = true, implement = true, landEarly = false, before = () => {}, cfg = {} } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'stub-direct-'));
   const calls = join(dir, 'calls'); writeFileSync(calls, '');
-  const bin = stubClaude(dir, directStubJs(calls, { loggedIn, implement }));
+  const bin = stubClaude(dir, directStubJs(calls, { loggedIn, implement, landEarly }));
   const { wt, origin } = makeDirectRepo(cfg);
   const db = openDb();
   const id = createRun(db, { slug: 'd', repo: 'demo', repo_path: wt, worktree: wt, branch: 'autodev/001-x', requirement: 'ship feature.txt' });
@@ -421,6 +428,18 @@ test('pushMode direct: a run whose implement stage wrote nothing parks instead o
   // main still carries only the other run's commit; this run landed nothing
   const log = execFileSync('git', ['log', '--format=%s', 'main'], { cwd: origin, encoding: 'utf8' }).trim().split('\n');
   assert.equal(log[0], 'elsewhere');
+});
+
+test('pushMode direct: a run whose own commits already reached the base lands rather than parking', () => {
+  // Run #564. The branch wrote code, the code reached main before stage 8 looked, and the
+  // land check — "is HEAD an ancestor of origin/main" — reads the same on a branch that
+  // wrote nothing. It parked with "the implement stage produced no code" while its work sat
+  // on main, deployed, and its ticket stayed open. What separates the two is whether the
+  // Implement stage itself wrote a commit, which is measured in the worktree while it runs.
+  const { run, events } = runDirect({ landEarly: true });
+  assert.equal(run.status, 'DONE', run.blocked_reason ?? '');
+  assert.match(events, /"type":"merged".*landed outside this attempt/);
+  assert.match(events, /"type":"deployed"/);
 });
 
 test('auth preflight: a signed-out CLI parks before any session is spent, and says how to sign in', () => {
