@@ -248,6 +248,7 @@ Per-repo `.autodev.json` (committed to the *target* repo):
 | `stageModels` | `{"review": "claude-opus-4-8"}` | per-stage override (keys: spec, analyze, implement, verify, push, review, test) |
 | `effort` | `"high"` | effort for every stage session — low, medium, high, xhigh, max (default `max`) |
 | `stageEffort` | `{"push": "low"}` | per-stage effort override, same keys as `stageModels` |
+| `design` | `{"screenshotCmd": "bash scripts/design-shot.sh", "maxMismatchPct": 10}` | design tickets: the command sessions must render with (real app, real CSS), and the highest palette-diff mismatch (default 10%) and masked share (`maxMaskedPct`, default 40%) a `score-<screen>.json` may carry before Implement/Verify refuse to pass |
 | `until` | `"analyze"` | always stop after this stage |
 | `push` | `false` | never push/PR — caps runs at Verify |
 | `pushMode` | `"direct"` | stage 5 rebases + pushes the branch itself and stage 8 fast-forwards the base branch — no PR, no `gh`, no session. Default: PR via `gh` |

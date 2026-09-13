@@ -110,9 +110,13 @@ test('any stage collects the design side-by-sides, so the ticket carries the com
   writeFileSync(join(wt, '.autodev/design/card.png'), 'the reference');
   writeFileSync(join(wt, '.autodev/design/compare-card.png'), 'side by side');
   writeFileSync(join(wt, '.autodev/design/compare-list.webp'), 'side by side');
+  writeFileSync(join(wt, '.autodev/design/score-card.json'), '{"mismatchPct":4}');
+  writeFileSync(join(wt, '.autodev/design/diff-card.png'), 'heat map');
+  writeFileSync(join(wt, '.autodev/design/render-card.png'), 'the raw render stays behind');
+  writeFileSync(join(wt, '.autodev/design/brief-card.json'), 'so does the brief');
 
   const copied = collectProof({ runDir, worktree: wt, stageKey: 'verify' });
-  assert.deepEqual(copied.sort(), ['compare-card.png', 'compare-list.webp', 'verify.json']);
+  assert.deepEqual(copied.sort(), ['compare-card.png', 'compare-list.webp', 'diff-card.png', 'score-card.json', 'verify.json']);
   // the reference itself is not evidence of anything — only the comparison is
   assert.ok(!copied.includes('card.png'));
 });

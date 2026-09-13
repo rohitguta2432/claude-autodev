@@ -9,6 +9,30 @@ A design reference is an acceptance criterion. "Looks about right" is not a verd
 neither is a description of the design written from memory. The only evidence that a screen
 matches a picture is the two pictures beside each other.
 
+## The tools — run these, do not rewrite them
+
+Three scripts ship in this skill's `scripts/` directory (installed at
+`~/.claude/skills/autodev-pixel-match/scripts/`; autodev's prompts name them by absolute path).
+They exist because every session used to hand-roll the same three things and get the same three
+wrong: a viewport that was not the reference's, a colour that was estimated, a "match" nobody
+had measured.
+
+| Script | What it does | When |
+|---|---|---|
+| `brief.py <dir>` | Writes `brief-<name>.json` per reference: size, device guess, **the viewport and DPR to render at**, sampled palette, top/bottom band colours, and `brief-<name>-{top,mid,bottom}.png` crops. | autodev runs it before the first session. Read the brief before the picture. |
+| `shot.mjs <url> <out.png> --viewport WxH --dpr N [--cookie k=v] [--scroll-y px] [--full-page]` | Screenshots over the DevTools protocol at an exact CSS viewport and DPR, waits for `document.fonts.ready`, writes an `<out>.json` sidecar with what it did. Zero dependencies, Node ≥ 22. | Every render — unless the repo's `.autodev.json` names a `design.screenshotCmd`, in which case run that, exactly. |
+| `score.py --ref <ref> --render <render> --screen <name> [--mask x0,y0,x1,y1]...` | Classifies both pictures to the reference's palette on a grid, diffs the classes, writes `score-<name>.json` (`mismatchPct`, `maskedPct`, the worst blocks with the colour each side has there) and `diff-<name>.png` heat map. Warns when the two are different shapes. | After every render. **The gate reads this file.** Fix the worst block it names, re-render, re-score. |
+
+Plain `chrome --headless --screenshot --window-size=W,H` is not a viewport on macOS: the page lays
+out wider and is cropped, and you photograph a layout the app never has. That is why `shot.mjs`
+exists; do not go back to the flag.
+
+**The gate.** For every `compare-<screen>.png` you save, autodev requires a `score-<screen>.json`
+at or under the repo's `design.maxMismatchPct` (default 10%) with at most `design.maxMaskedPct`
+(default 40%) of the screen masked. Over the limit parks the run. Never edit the JSON by hand,
+and never mask what you could not match — mask only what is legitimately different (a QR with
+another URL, live prices, a real photo), and say so.
+
 ## The loop
 
 **1. Read the reference — properly.**

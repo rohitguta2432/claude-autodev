@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { openDb, getRun, updateRun, runDir, PORT, skippedSet, AUTODEV_HOME } from './db.js';
 import { emit } from './events.js';
 import { STAGES, scheduledStages, untilStage, detectTestCmd, findSpecDir, specDirs,
-         holdoutPrompt, holdoutFixPrompt, stageN, DESIGN_DIR, designRefs } from './stages.js';
+         holdoutPrompt, holdoutFixPrompt, stageN, DESIGN_DIR, designRefs, designBriefs, designScript } from './stages.js';
 import { repoConfig, modelFor, effortFor } from './config.js';
 import { parseClaudeResult } from './metrics.js';
 import { causeLine, classify, sessionBlock } from './session.js';
@@ -67,6 +67,21 @@ await ev({ type: 'activity', stage: run.stage, detail: existsSync(join(run.workt
     } catch (e) {
       await ev({ type: 'activity', stage: run.stage,
         detail: `design references unavailable: ${String(e.message || e).slice(0, 120)}` });
+    }
+  }
+  // Pre-digest what was pulled: size, device, the viewport to render at, the sampled palette,
+  // crops. Computed once here by a script rather than re-derived by every session by eye, which
+  // is where "render at the wrong size, then fix differences that were never there" starts.
+  // Best-effort like the download: no python3 or no Pillow leaves the session to measure itself.
+  if (designRefs(run).length > designBriefs(run).length) {
+    try {
+      const out = execFileSync(process.env.AUTODEV_PYTHON || 'python3', [designScript('brief.py'), dir],
+        { encoding: 'utf8', timeout: 120_000, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      await ev({ type: 'activity', stage: run.stage,
+        detail: `design briefs: ${out.trim().split('\n').filter(Boolean).join(' | ').slice(0, 400)}` });
+    } catch (e) {
+      await ev({ type: 'activity', stage: run.stage,
+        detail: `design briefs not generated (${String(e.stderr || e.message || e).trim().slice(0, 160)}) — the session will measure the references itself` });
     }
   }
 }

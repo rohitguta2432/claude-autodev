@@ -18,15 +18,16 @@ const STAGE_ARTIFACTS = (runDir) => ({
   deploy: [[join(runDir, 'deploy-output.txt'), 'deploy-output.txt']],
 });
 
-// The side-by-sides a design ticket produced. Named by the session rather than by us, so they
-// are discovered instead of listed — and they are the one artifact a person reading the ticket
+// The side-by-sides a design ticket produced, with the score each was gated on and the heat
+// map that says where the difference is. Named by the session rather than by us, so they are
+// discovered instead of listed — and they are the one artifact a person reading the ticket
 // can judge without opening the app. Swept at every stage, not just Verify: a repo that skips
 // Verify still produces them in Implement, and gating on one stage meant a design ticket closed
 // with prod screenshots but no comparison — the one thing it was raised about.
 const designCompareFiles = (worktree) => {
   try {
     return readdirSync(join(worktree, '.autodev/design'))
-      .filter(f => /^compare-.*\.(png|jpe?g|webp)$/i.test(f)).sort()
+      .filter(f => /^(compare|diff)-.*\.(png|jpe?g|webp)$/i.test(f) || /^score-.*\.json$/i.test(f)).sort()
       .map(f => [join('.autodev/design', f), f]);
   } catch { return []; }
 };

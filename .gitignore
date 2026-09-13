@@ -11,3 +11,4 @@ node_modules/
 credentials*
 .claude/settings.local.json
 .mcp.json
+__pycache__/

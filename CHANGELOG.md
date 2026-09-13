@@ -8,6 +8,18 @@ criteria the builder hadn't written, nothing merged or deployed, and nothing
 pulled the next job. All four are here.
 
 ### Added
+- **Design tickets are measured, not eyeballed.** A ticket's image attachments were
+  already pulled into `.autodev/design/`; now the runner pre-digests each one with the
+  skill's `brief.py` (size, the device that took it, the CSS viewport and DPR to render
+  at, the sampled palette, crops), Implement and Verify are told to render with the
+  repo's `design.screenshotCmd` (or the skill's zero-dependency `shot.mjs`, which sets
+  viewport, DPR and waits for fonts over the DevTools protocol) and to score the render
+  with `score.py`, and both gates refuse to pass a `compare-<screen>.png` that has no
+  `score-<screen>.json` at or under `design.maxMismatchPct` (default 10%) with at most
+  `design.maxMaskedPct` (40%) hidden. Implement gates too, because a repo that skips
+  Verify was a repo where a design ticket shipped uncompared. Scores and heat maps
+  travel with the side-by-sides into the run's proof. `install-skill` now ships the
+  skill's `scripts/` alongside its `SKILL.md`.
 - **Holdout scenarios.** The spec stage now writes end-to-end acceptance
   scenarios; the runner moves them out of the worktree and into
   `.git/info/exclude` the moment the spec gate passes, so no later session can

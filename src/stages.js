@@ -1,7 +1,9 @@
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
 import { triageClause, holdoutClause, HOLDOUT_DIR, HOLDOUT_VERDICT } from './guidance.js';
+import { repoConfig } from './config.js';
 
 // Every specs/NNN-* directory name in a worktree, sorted. Exported because "highest-numbered"
 // is NOT the same question as "which one did this session just create" — a repo can already
@@ -149,27 +151,96 @@ const requirementRef = (run) => `the requirement below (from Jira ${run.jira_key
 // side-by-side that shows it did.
 export const DESIGN_DIR = '.autodev/design';
 const IMAGE = /\.(png|jpe?g|webp|gif|avif)$/i;
-const listDesign = (run, pick) => {
+// Everything the loop writes next to the references, by prefix. A render or a crop is not a
+// second design to match, so none of these ever count as a reference.
+const ARTIFACT = /^(compare|brief|render|diff|score)-/i;
+const listDesign = (run, pick, test = IMAGE) => {
   if (!run?.worktree) return [];
   try {
-    return readdirSync(join(run.worktree, DESIGN_DIR)).filter(f => IMAGE.test(f) && pick(f)).sort();
+    return readdirSync(join(run.worktree, DESIGN_DIR)).filter(f => test.test(f) && pick(f)).sort();
   } catch { return []; }
 };
 /** The references themselves — what the built UI has to look like. */
-export const designRefs = (run) => listDesign(run, f => !f.startsWith('compare-'));
+export const designRefs = (run) => listDesign(run, f => !ARTIFACT.test(f));
 /** The side-by-sides a session produced: reference beside the real screen. */
-export const designCompares = (run) => listDesign(run, f => f.startsWith('compare-'));
+export const designCompares = (run) => listDesign(run, f => /^compare-/i.test(f));
+/** The briefs the runner pre-digested (brief.py): size, device, viewport, palette per reference. */
+export const designBriefs = (run) => listDesign(run, f => /^brief-.*\.json$/i.test(f), /\.json$/i);
+
+// The scripts the skill ships, by absolute path. The prompt names them so the session runs the
+// same scorer the gate reads, instead of writing its own measure of its own work.
+const SKILL_SCRIPTS = join(dirname(fileURLToPath(import.meta.url)), '..', 'skill', 'autodev-pixel-match', 'scripts');
+export const designScript = (name) => join(SKILL_SCRIPTS, name);
+
+// Per-repo knobs under .autodev.json "design". The threshold is the whole point: "looks
+// close" is not a verdict, a percentage is. Defaults are deliberately loose enough that a real
+// match passes with live content in it, and tight enough that "inspired by" does not.
+export const DESIGN_DEFAULTS = { maxMismatchPct: 10, maxMaskedPct: 40 };
+export const designConfig = (run) => ({ ...DESIGN_DEFAULTS, ...(repoConfig(run?.worktree ?? '').design ?? {}) });
+
+/** The scores written by score.py: one per compared screen. Unparseable files are reported, not skipped. */
+export const designScores = (run) => listDesign(run, f => /^score-.*\.json$/i.test(f), /\.json$/i).map(f => {
+  const screen = f.replace(/^score-/i, '').replace(/\.json$/i, '');
+  try {
+    const s = JSON.parse(readFileSync(join(run.worktree, DESIGN_DIR, f), 'utf8'));
+    return { file: f, screen, mismatchPct: Number(s.mismatchPct), maskedPct: Number(s.maskedPct ?? 0), warnings: s.warnings ?? [] };
+  } catch (e) { return { file: f, screen, error: String(e.message || e) }; }
+});
+
+// The appearance gate, shared by Implement and Verify. It lives on both because a repo may
+// skip Verify (.autodev.json "skip") — and a design ticket that skips the only stage that
+// checks appearance ships unchecked. Every compare image must carry a score at or under the
+// threshold, and the score may not have masked most of the screen to get there.
+export function designGate(run) {
+  const refs = designRefs(run);
+  if (!refs.length) return;
+  const compares = designCompares(run);
+  need(compares.length > 0,
+    `no ${DESIGN_DIR}/compare-*.png — the design references (${refs.join(', ')}) were never compared to the built UI`);
+  const { maxMismatchPct, maxMaskedPct } = designConfig(run);
+  const scores = designScores(run);
+  for (const c of compares) {
+    const screen = c.replace(/^compare-/i, '').replace(/\.[^.]+$/, '');
+    const s = scores.find(x => x.screen === screen);
+    need(s, `${DESIGN_DIR}/${c} has no ${DESIGN_DIR}/score-${screen}.json — run the skill's score.py; a side-by-side without a number is an opinion`);
+    need(!s.error && Number.isFinite(s.mismatchPct), `${DESIGN_DIR}/${s.file} is not a score.py result (${s.error ?? 'mismatchPct missing'})`);
+    need(s.maskedPct <= maxMaskedPct,
+      `${DESIGN_DIR}/${s.file} masks ${s.maskedPct}% of the screen (limit ${maxMaskedPct}%) — a score that hides most of the picture proves nothing`);
+    need(s.mismatchPct <= maxMismatchPct,
+      `${screen}: ${s.mismatchPct}% of the screen differs from the reference (limit ${maxMismatchPct}%) — worst blocks are listed in ${DESIGN_DIR}/${s.file}`);
+  }
+}
+
+// How the session is told to render. A repo that names a screenshot command gets it quoted
+// verbatim and the scratch-harness route closed; one that does not gets the skill's shot.mjs,
+// which at least fixes the viewport, DPR and fonts — the three things a hand-rolled Chrome
+// invocation gets wrong.
+const renderClause = (run) => {
+  const { screenshotCmd } = designConfig(run);
+  const briefs = designBriefs(run);
+  const viewportNote = briefs.length
+    ? `The runner has already measured each reference: ${briefs.join(', ')} give its size, the device that took it, the CSS viewport and devicePixelRatio to render at, its sampled palette, and crops (brief-<name>-top/mid/bottom.png). Read the brief before the picture, and render at the viewport it names — a render at the wrong size differs everywhere and tells you nothing. `
+    : '';
+  const how = screenshotCmd
+    ? `Render every screen with the repo's own screenshot command, exactly: \`${screenshotCmd} <url-or-path> ${DESIGN_DIR}/render-<screen>.png [--viewport WxH --dpr N]\`. It runs the real app in the app's own CSS; do not build a scratch HTML harness, and do not call Chrome yourself. `
+    : `Render every screen with the skill's screenshotter, which sets the viewport and DPR exactly and waits for web fonts: \`node ${designScript('shot.mjs')} <url> ${DESIGN_DIR}/render-<screen>.png --viewport WxH --dpr N\`. Point it at the running app, or at a page that loads the app's own global stylesheet — never a bare HTML file with the component pasted in. `;
+  return viewportNote + how;
+};
 
 // Appended to the Implement prompt, so the session is told about the pictures in the same
 // breath as the work. Naming the files matters: "the attached design" is not a path.
 const designClause = (run) => {
   const refs = designRefs(run);
   if (!refs.length) return '';
+  const { maxMismatchPct, maxMaskedPct } = designConfig(run);
   return `\n\nThis ticket carries design references, already downloaded to ${DESIGN_DIR}/: ${refs.join(', ')}. `
     + `Open them — they are the acceptance criteria for how this must look, and they outrank your own judgement about layout, colour and type. `
-    + `Build the UI to match, then prove it: render the finished screen, screenshot it, and save one image with the reference beside your screenshot as ${DESIGN_DIR}/compare-<screen>.png. `
-    + `Iterate — render, compare, correct — until the two read as the same screen rather than as one inspired by the other; sample colours out of the reference instead of estimating them. `
-    + `Use the autodev-pixel-match skill if it is installed.`;
+    + renderClause(run)
+    + `Then score the render against its reference: \`python3 ${designScript('score.py')} --ref ${DESIGN_DIR}/<reference> --render ${DESIGN_DIR}/render-<screen>.png --screen <screen> [--mask x0,y0,x1,y1 for regions that are legitimately different: a QR carrying another URL, live prices, a real photo]\`. `
+    + `It writes ${DESIGN_DIR}/score-<screen>.json and a heat map diff-<screen>.png, and lists the worst blocks with the colour each side has there. Fix the worst block first, re-render, re-score. `
+    + `The gate on this stage requires, for every compare image, a score-<screen>.json at or under ${maxMismatchPct}% mismatch with at most ${maxMaskedPct}% masked; a higher number parks the run, so keep going until the number is under it, and never edit the JSON by hand. `
+    + `Finally save one image with the reference beside your final render as ${DESIGN_DIR}/compare-<screen>.png (same <screen> as the score). `
+    + `Sample colours out of the reference instead of estimating them. Use the autodev-pixel-match skill if it is installed.`;
 };
 
 // Verify's own appearance question. Separate wording from Implement's: this session is not
@@ -177,10 +248,11 @@ const designClause = (run) => {
 const designVerifyClause = (run) => {
   const refs = designRefs(run);
   if (!refs.length) return '';
+  const { maxMismatchPct } = designConfig(run);
   return ` (E) appearance — the design references in ${DESIGN_DIR}/ (${refs.join(', ')}) are acceptance criteria:`
-    + ` render the built UI, put it beside each reference, and judge whether they read as the same screen.`
-    + ` Save every side-by-side as ${DESIGN_DIR}/compare-<screen>.png; a reference with no compare image is a CRITICAL finding,`
-    + ` and so is a visible mismatch you chose not to fix.`;
+    + ` re-render the built UI (${designConfig(run).screenshotCmd ? `with the repo's screenshot command \`${designConfig(run).screenshotCmd}\`` : `with \`node ${designScript('shot.mjs')}\``}, at the viewport the brief-<name>.json names),`
+    + ` re-score it with \`python3 ${designScript('score.py')}\` so ${DESIGN_DIR}/score-<screen>.json reflects the branch as it is now, and put it beside each reference as ${DESIGN_DIR}/compare-<screen>.png.`
+    + ` A reference with no compare image is a CRITICAL finding, so is a score over ${maxMismatchPct}% you chose not to fix, and so is a score whose masks hide the part that differs.`;
 };
 
 // The stages a run will actually attempt. Deploy is opt-in, so an unconfigured repo has a
@@ -246,6 +318,9 @@ export const STAGES = [
       // Spec-less: the commit is the evidence — a session that changed nothing did nothing.
       if (!hasSpecSet(run))
         need(git(run.worktree, 'show --stat --format= HEAD').trim() !== '', 'no commit made for the requirement');
+      // Appearance is checked here as well as in Verify: a repo that skips Verify must not be
+      // a repo where a design ticket ships uncompared.
+      designGate(run);
     },
   },
   {
@@ -260,12 +335,10 @@ export const STAGES = [
       const blocking = findings.filter(f => /^(CRITICAL|HIGH)$/i.test(f.severity));
       need(verdict === 'PASS' && blocking.length === 0,
         `verify verdict: ${verdict} — ${blocking.length} critical/high finding(s) remain`);
-      // A PASS on a design ticket means someone looked at the two pictures side by side.
-      // Without the compare image there is no evidence that happened, and "looks right" is
-      // exactly the claim this pipeline exists not to take on trust.
-      if (designRefs(run).length)
-        need(designCompares(run).length > 0,
-          `no ${DESIGN_DIR}/compare-*.png — the design references (${designRefs(run).join(', ')}) were never compared to the built UI`);
+      // A PASS on a design ticket means someone measured the two pictures against each other.
+      // Without the compare image and its score there is no evidence that happened, and
+      // "looks right" is exactly the claim this pipeline exists not to take on trust.
+      designGate(run);
     },
   },
   {

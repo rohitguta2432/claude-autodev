@@ -465,6 +465,13 @@ nobody is watching.
     mkdirSync(dirname(dest), { recursive: true });
     copyFileSync(join(ROOT, 'skill', src), dest);
     console.log(`installed skill: ${dest}`);
+    // Tools the skill's text refers to (scripts/brief.py, score.py, shot.mjs). Always refreshed:
+    // they are executables the pipeline's prompts name by path, not prose anyone edits.
+    const scripts = join(ROOT, 'skill', dirname(src), 'scripts');
+    if (existsSync(scripts)) {
+      cpSync(scripts, join(root, name, 'scripts'), { recursive: true });
+      console.log(`installed scripts: ${join(root, name, 'scripts')}`);
+    }
   }
 } else {
   console.log(USAGE);

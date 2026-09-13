@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
 import { STAGES, scheduledStages, findSpecDir, specDirOf, detectTestCmd, specDirFor, isCompleteSpecDir,
-         markerSubdirs, hasTestSources, untilStage, hasSpecSet, designRefs, designCompares } from '../src/stages.js';
+         markerSubdirs, hasTestSources, untilStage, hasSpecSet, designRefs, designCompares, designBriefs,
+         designScores, designGate, designScript, DESIGN_DEFAULTS } from '../src/stages.js';
 import { git, commit } from './helpers.js';
 
 function gitRepo() {
@@ -302,12 +303,90 @@ function repoWithDesign(files) {
 }
 const stage = (key) => STAGES.find(s => s.key === key);
 
-test('design references are listed, and compare images are not mistaken for them', () => {
-  const wt = repoWithDesign(['card.png', 'flow.JPG', 'compare-card.png', 'notes.txt']);
+const score = (wt, screen, body) =>
+  writeFileSync(join(wt, '.autodev/design', `score-${screen}.json`), typeof body === 'string' ? body : JSON.stringify(body));
+
+test('design references are listed, and the loop\'s own artifacts are not mistaken for them', () => {
+  const wt = repoWithDesign(['card.png', 'flow.JPG', 'compare-card.png', 'render-card.png', 'diff-card.png',
+    'brief-card-top.png', 'brief-card.json', 'score-card.json', 'notes.txt']);
   const run = { worktree: wt };
   assert.deepEqual(designRefs(run), ['card.png', 'flow.JPG']);
   assert.deepEqual(designCompares(run), ['compare-card.png']);
+  assert.deepEqual(designBriefs(run), ['brief-card.json']);
   assert.deepEqual(designRefs({ worktree: gitRepo() }), [], 'no design directory is not an error');
+});
+
+test('the gate wants a score for every compare image, at or under the threshold, and not mostly masked', () => {
+  const wt = repoWithDesign(['card.png']);
+  const run = { worktree: wt };
+  assert.throws(() => designGate(run), /never compared to the built UI/);
+
+  writeFileSync(join(wt, '.autodev/design/compare-card.png'), 'x');
+  assert.throws(() => designGate(run), /no \.autodev\/design\/score-card\.json/, 'a side-by-side alone is an opinion');
+
+  score(wt, 'card', 'not json');
+  assert.throws(() => designGate(run), /not a score\.py result/);
+
+  score(wt, 'card', { mismatchPct: 24.7, maskedPct: 5 });
+  assert.throws(() => designGate(run), /card: 24\.7% of the screen differs .*limit 10%/);
+
+  score(wt, 'card', { mismatchPct: 2, maskedPct: 61 });
+  assert.throws(() => designGate(run), /masks 61% of the screen/);
+
+  score(wt, 'card', { mismatchPct: 7.9, maskedPct: 12 });
+  designGate(run); // measured, under the limit, honestly masked — the gate opens
+  assert.deepEqual(designScores(run).map(s => [s.screen, s.mismatchPct]), [['card', 7.9]]);
+
+  // a second compare image without its own score closes it again
+  writeFileSync(join(wt, '.autodev/design/compare-list.png'), 'x');
+  assert.throws(() => designGate(run), /score-list\.json/);
+
+  // no references: nothing to demand, whatever else is in the directory
+  designGate({ worktree: gitRepo() });
+});
+
+test('the threshold comes from .autodev.json "design", with defaults when it says nothing', () => {
+  const wt = repoWithDesign(['card.png']);
+  writeFileSync(join(wt, '.autodev/design/compare-card.png'), 'x');
+  score(wt, 'card', { mismatchPct: 14, maskedPct: 0 });
+  const run = { worktree: wt };
+  assert.throws(() => designGate(run), /limit 10%/);
+  assert.equal(DESIGN_DEFAULTS.maxMismatchPct, 10);
+  writeFileSync(join(wt, '.autodev.json'), JSON.stringify({ design: { maxMismatchPct: 15 } }));
+  designGate(run);
+  writeFileSync(join(wt, '.autodev.json'), JSON.stringify({ design: { maxMismatchPct: 5 } }));
+  assert.throws(() => designGate(run), /limit 5%/);
+});
+
+test('implement is told how to render and how to score, and the scorer it is told to run is the one the gate reads', () => {
+  const wt = repoWithDesign(['card.png']);
+  const run = { worktree: wt, requirement: 'SCRUM-9: the card' };
+  let prompt = stage('implement').prompt(run);
+  assert.match(prompt, /shot\.mjs/, 'no repo command: the skill\'s screenshotter, which fixes viewport and DPR');
+  assert.match(prompt, new RegExp(designScript('score.py').replaceAll('\\', '\\\\').replaceAll('.', '\\.')));
+  assert.match(prompt, /score-<screen>\.json at or under 10% mismatch/);
+  assert.doesNotMatch(prompt, /brief-/, 'no brief on disk, none promised');
+
+  writeFileSync(join(wt, '.autodev.json'), JSON.stringify({ design: { screenshotCmd: 'bash scripts/design-shot.sh', maxMismatchPct: 8 } }));
+  writeFileSync(join(wt, '.autodev/design/brief-card.json'), '{}');
+  prompt = stage('implement').prompt(run);
+  assert.match(prompt, /exactly: `bash scripts\/design-shot\.sh <url-or-path>/);
+  assert.match(prompt, /do not build a scratch HTML harness/);
+  assert.doesNotMatch(prompt, /shot\.mjs/, 'the repo\'s command replaces the generic one');
+  assert.match(prompt, /brief-card\.json/);
+  assert.match(prompt, /under 8% mismatch/);
+});
+
+test('implement cannot finish a design ticket without the measured match, even when Verify is skipped', () => {
+  const wt = repoWithDesign(['card.png']);
+  writeFileSync(join(wt, '.gitignore'), '.autodev/\n'); // as every real target repo does
+  writeFileSync(join(wt, 'a.txt'), 'x');
+  git(wt, ['add', '-A'], commit('the change'));
+  const run = { worktree: wt, requirement: 'SCRUM-9: the card' };
+  assert.throws(() => stage('implement').check(run), /never compared to the built UI/);
+  writeFileSync(join(wt, '.autodev/design/compare-card.png'), 'x');
+  score(wt, 'card', { mismatchPct: 3.2, maskedPct: 0 });
+  stage('implement').check(run);
 });
 
 test('implement is told about the references by name, and told to prove the match', () => {
@@ -328,7 +407,9 @@ test('verify cannot pass a design ticket that was never compared', () => {
   assert.throws(() => stage('verify').check(run), /never compared to the built UI/);
 
   writeFileSync(join(wt, '.autodev/design/compare-card.png'), 'x');
-  stage('verify').check(run); // the side-by-side exists — the gate opens
+  assert.throws(() => stage('verify').check(run), /score-card\.json/, 'a picture without its number is not evidence');
+  score(wt, 'card', { mismatchPct: 4, maskedPct: 0 });
+  stage('verify').check(run); // the side-by-side exists and was measured under the limit — the gate opens
 
   // a run with no references keeps the old behaviour: nothing to compare, nothing to demand
   const plain = gitRepo();
@@ -338,7 +419,8 @@ test('verify cannot pass a design ticket that was never compared', () => {
 });
 
 test('verify names appearance as a criterion only when there are references', () => {
-  assert.match(stage('verify').prompt({ worktree: repoWithDesign(['card.png']), requirement: 'r' }),
-    /\(E\) appearance/);
+  const p = stage('verify').prompt({ worktree: repoWithDesign(['card.png']), requirement: 'r' });
+  assert.match(p, /\(E\) appearance/);
+  assert.match(p, /re-score it with `python3 .*score\.py`/);
   assert.doesNotMatch(stage('verify').prompt({ worktree: gitRepo(), requirement: 'r' }), /\(E\) appearance/);
 });
