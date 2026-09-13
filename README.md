@@ -291,7 +291,7 @@ subscription login draws on your subscription limits, while an
 
 - `autodev cost <id>` — per-stage sessions/tokens/cost summed from the run's
   metrics events (also visible per stage on the dashboard).
-- Every session runs `claude-fable-5` at `--effort max` unless told otherwise. Pin cheaper
+- Every session runs `claude-fable-5-1` at `--effort max` unless told otherwise. Pin cheaper
   models or lower effort: `AUTODEV_CLAUDE_MODEL` / `AUTODEV_CLAUDE_EFFORT` for everything,
   or per stage in `.autodev.json` — `{"stageModels": {"push": "claude-sonnet-5"},
   "stageEffort": {"push": "low"}}` (per-stage > repo-wide > env > default).

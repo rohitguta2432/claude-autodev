@@ -12,7 +12,7 @@ export function repoConfig(repoPath) {
 
 // The built-in defaults for every stage session (specs/003): the strongest model at the
 // highest effort. A pipeline nobody is watching should not be the place to save on thinking.
-export const DEFAULT_MODEL = 'claude-fable-5';
+export const DEFAULT_MODEL = 'claude-fable-5-1';
 export const DEFAULT_EFFORT = 'max';
 
 // Model for one stage session: per-stage map > repo-wide model > env pin > DEFAULT_MODEL.
